@@ -45,6 +45,13 @@ Tout a été dérivé du JavaScript du firmware d'un GS1200-5 v3 en
   prise. C'est la partie la plus testée du code.
 - **Les CGI répondent 200 quoi qu'il arrive.** La réponse ne prouve rien :
   chaque écriture est relue et vérifiée contre ce qui était demandé.
+- **Il ne répond qu'à une requête à la fois.** Pas seulement une *session* à
+  la fois : une *requête*. Quatre rafraîchissements lancés ensemble ne
+  s'exécutent pas en parallèle, ils font la queue dans l'appareil — et le
+  chronomètre HTTP tourne pendant cette attente, si bien que le dernier
+  dépasse le délai. Le provider fait donc la queue de son côté, où attendre ne
+  coûte rien, avec un verrou **par appareil** : les switchs d'un parc avancent
+  de front, les requêtes d'un même switch se rangent.
 - **Il referme ses connexions sans prévenir.** Le GS1200 abandonne vite une
   connexion laissée en réserve. Go réémet tout seul une requête idempotente
   dans ce cas, mais jamais un POST — et le login en est un. Une lecture de VLAN

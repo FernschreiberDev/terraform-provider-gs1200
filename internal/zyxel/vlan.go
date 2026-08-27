@@ -33,10 +33,22 @@ func query(pairs []kv) string {
 
 // -- reads -----------------------------------------------------------------
 
-// ReadVLANTable reads VLAN membership. Needs no session: the endpoint is
-// unauthenticated, which is a firmware weakness rather than a design choice,
-// but it means VLAN state can be read without touching the exclusive session.
+// ReadVLANTable reads VLAN membership. It needs no session — the endpoint is
+// unauthenticated, a firmware weakness rather than a design choice — but it
+// still takes the device lock, because the constraint is the appliance, not
+// the session: a GS1200 answers one request at a time and each costs it a
+// 1.85 s TLS handshake. Four refreshes arriving together do not run in
+// parallel, they queue, and the last one times out.
 func (c *Client) ReadVLANTable(ctx context.Context) ([]VLANEntry, error) {
+	lock := lockFor(c.Host)
+	lock.Lock()
+	defer lock.Unlock()
+	return c.fetchVLANTable(ctx)
+}
+
+// fetchVLANTable is the same read with no locking, for callers that already
+// hold the device — every step of a write does.
+func (c *Client) fetchVLANTable(ctx context.Context) ([]VLANEntry, error) {
 	payload, err := c.get(ctx, "vlanEntry.xml")
 	if err != nil {
 		return nil, err
@@ -83,7 +95,7 @@ func parseListPage(html string) (pvid map[int]int, portCount int, enabled bool, 
 
 // readState reads the full state, assuming a session is already held.
 func (c *Client) readState(ctx context.Context) (Config, error) {
-	entries, err := c.ReadVLANTable(ctx)
+	entries, err := c.fetchVLANTable(ctx)
 	if err != nil {
 		return Config{}, err
 	}

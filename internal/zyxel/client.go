@@ -127,7 +127,12 @@ func NewClient(host, password, scheme string, verifyTLS bool, timeout time.Durat
 		scheme = "https"
 	}
 	if timeout == 0 {
-		timeout = 10 * time.Second
+		// A request costs about 1.9 s on idle hardware, almost all of it the
+		// TLS handshake. Twenty seconds is not for our own traffic — the
+		// device lock serialises that — but for everything else talking to
+		// the same switch, Switchboard's own polling first among them. No
+		// lock here can arbitrate another program.
+		timeout = 20 * time.Second
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -367,8 +372,13 @@ func (c *Client) withSession(ctx context.Context, work func(context.Context) err
 	return logoutErr
 }
 
-// Identify reports model and firmware, readable without logging in.
+// Identify reports model and firmware, readable without logging in — but
+// still one request at a time, like everything else this device serves.
 func (c *Client) Identify(ctx context.Context) (model, firmware string, err error) {
+	lock := lockFor(c.Host)
+	lock.Lock()
+	defer lock.Unlock()
+
 	html, err := c.get(ctx, "zlogin.html")
 	if err != nil {
 		return "", "", err

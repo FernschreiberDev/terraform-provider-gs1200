@@ -4,7 +4,7 @@
 # directory laid out the way a registry mirror would be, which is what
 # `filesystem_mirror` in a .tofurc points at.
 
-VERSION ?= 0.2.1
+VERSION ?= 0.2.2
 BINARY  := terraform-provider-schaltwerk
 # The address in required_providers. Nothing is fetched from it; it is the key
 # the binary is filed under.
