@@ -11,8 +11,8 @@ circuits sont réellement basculés, par opposition au schéma qui les décrit.
 
 | | Lecture | Écriture |
 |---|---|---|
-| VLANs 802.1Q (membres tagués / non tagués) | oui | oui |
-| PVID par port | oui | oui |
+| Existence des VLANs 802.1Q | oui | oui |
+| Configuration par port : PVID, membres tagués et non tagués | oui | oui |
 | Modèle, firmware, VLAN de management | oui | — |
 
 Rien d'autre. Pas de trunking, pas de QoS, pas de mise à jour de firmware :
@@ -142,34 +142,86 @@ Exemple complet dans [`examples/main.tf`](examples/main.tf).
 | `verify_tls` | `false` | Ces switchs portent un certificat auto-signé non remplaçable. |
 | `timeout` | `10` | Secondes par requête. Le CPU du GS1200 est lent. |
 
+### PVID et untagged : deux sens de circulation
+
+C'est la distinction qui gouverne tout le modèle, et elle se confond
+facilement.
+
+**`untagged` / `tagged` — la SORTIE.** Pour un couple (port, VLAN) : quand une
+trame de ce VLAN *sort* par ce port, garde-t-elle son étiquette 802.1Q ou la
+perd-elle ? Membre untagged = elle sort nue. Membre tagged = elle sort
+étiquetée.
+
+**`pvid` — l'ENTRÉE.** Quand une trame *sans étiquette* arrive sur ce port, à
+quel VLAN l'affecte-t-on ? Une seule valeur par port, forcément : une trame
+nue ne porte rien qui permette de choisir.
+
+```hcl
+# Port d'accès : l'appareil branché ignore tout des VLANs.
+resource "schaltwerk_zyxel_port" "camera" {
+  port     = 5
+  pvid     = 1003   # ce qui entre nu devient de l'IoT
+  untagged = [1003] # ce qui sort de l'IoT ressort nu
+}
+
+# Port hybride : management en natif, le reste en tagué vers le cœur.
+resource "schaltwerk_zyxel_port" "uplink" {
+  port     = 1
+  pvid     = 1
+  untagged = [1]
+  tagged   = [8, 1003]
+}
+```
+
+Les deux sont presque toujours cohérents, mais ils sont indépendants. Un
+`pvid` désignant un VLAN que le port ne porte pas untagged donne un
+comportement asymétrique : le trafic entre quelque part et les réponses
+ressortent ailleurs. Le matériel l'autorise et ne signale rien — le provider,
+lui, refuse, sauf `force`.
+
 ### `schaltwerk_zyxel_vlan`
 
-`vid` (1-4094, remplace la ressource si modifié), `tagged`, `untagged`,
-`force`. `index` est calculé : c'est l'emplacement de la VLAN dans la table du
-constructeur, qui l'adresse par slot et non par identifiant.
+`vid` (1-4094, remplace la ressource si modifié) et `force`. `index` est
+calculé : l'emplacement de la VLAN dans la table du constructeur, qui l'adresse
+par slot et non par identifiant.
 
-Un port présent dans `tagged` **et** `untagged` est traité comme tagué, ce que
-fait aussi le firmware.
+Cette ressource déclare **l'existence** d'un VLAN, rien d'autre. Quels ports le
+portent appartient à `schaltwerk_zyxel_port` : les deux n'écrivent jamais les
+mêmes octets, donc elles ne peuvent pas se les disputer. Un VLAN créé ici naît
+sans membre.
 
-Créer une VLAN qui existe déjà est refusé plutôt que silencieusement absorbé :
+Créer un VLAN qui existe déjà est refusé plutôt que silencieusement absorbé :
 
 ```bash
 tofu import 'schaltwerk_zyxel_vlan.mgmt' 1
 ```
 
-### `schaltwerk_zyxel_pvid`
+### `schaltwerk_zyxel_port`
 
-`port` (remplace la ressource si modifié), `vid`, `force`. Import par numéro
-de port.
+`port` (remplace la ressource si modifié), `pvid`, `untagged`, `tagged`,
+`force`. Import par numéro de port.
+
+Le switch range l'information dans l'autre sens — une table de VLANs, chacun
+portant un bitmap de ports membres — donc cette ressource est une vue que le
+provider assemble et réécrit. **Une écriture ne déplace jamais que le bit de
+son propre port** dans chaque ligne de VLAN. C'est cet invariant qui permet à
+chaque port d'être sa propre ressource sans que deux d'entre elles se défassent
+mutuellement, et qui rend un `apply` parallèle sûr.
+
+Tout VLAN nommé ici doit déjà exister en tant que `schaltwerk_zyxel_vlan` :
+une faute de frappe sur un identifiant échoue au lieu de provisionner un VLAN.
 
 **Détruire cette ressource ne change rien sur le switch.** Un port a toujours
-un PVID ; il n'existe pas d'état « aucun ». Le remettre à 1 déplacerait
-silencieusement le port dans la VLAN de management, alors OpenTofu se contente
-d'arrêter de le suivre, avec un avertissement.
+une configuration ; il n'existe pas d'état « non configuré » où le remettre, et
+en choisir un pendant un destroy déplacerait du trafic que personne n'a demandé
+à déplacer. OpenTofu cesse simplement de le suivre.
 
-Conséquence à connaître : détruire d'un coup une VLAN et le PVID qui la vise
-échoue, parce que le PVID reste en place. Vise une autre VLAN, applique, puis
-supprime.
+### Parallélisme
+
+Le verrou est **par appareil**, pas par client : deux switchs se configurent
+donc en parallèle, tandis que les ressources d'un même switch s'attendent
+proprement. `-parallelism=1` n'est pas nécessaire — il suffit que la valeur
+couvre le nombre de switchs.
 
 ### `data "schaltwerk_zyxel_switch"`
 

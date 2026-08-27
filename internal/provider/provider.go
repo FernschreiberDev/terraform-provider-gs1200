@@ -145,7 +145,7 @@ func (p *schaltwerkProvider) Configure(ctx context.Context, req provider.Configu
 func (p *schaltwerkProvider) Resources(context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewVLANResource,
-		NewPVIDResource,
+		NewPortResource,
 	}
 }
 

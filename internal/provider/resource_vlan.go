@@ -33,11 +33,9 @@ type vlanResource struct {
 func NewVLANResource() resource.Resource { return &vlanResource{} }
 
 type vlanModel struct {
-	VID      types.Int64 `tfsdk:"vid"`
-	Tagged   types.Set   `tfsdk:"tagged"`
-	Untagged types.Set   `tfsdk:"untagged"`
-	Force    types.Bool  `tfsdk:"force"`
-	Index    types.Int64 `tfsdk:"index"`
+	VID   types.Int64 `tfsdk:"vid"`
+	Force types.Bool  `tfsdk:"force"`
+	Index types.Int64 `tfsdk:"index"`
 }
 
 func (r *vlanResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -46,9 +44,11 @@ func (r *vlanResource) Metadata(_ context.Context, req resource.MetadataRequest,
 
 func (r *vlanResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "One 802.1Q VLAN on a Zyxel GS1200. Ports are 1-based, as printed " +
-			"on the switch. A port listed in both `tagged` and `untagged` is treated as " +
-			"tagged, which is what the firmware does.",
+		MarkdownDescription: "The existence of one 802.1Q VLAN on a Zyxel GS1200.\n\n" +
+			"This resource declares that the VLAN exists, and nothing else. Which ports " +
+			"carry it, tagged or untagged, belongs to `schaltwerk_zyxel_port` — the two " +
+			"never write the same bytes, so they cannot fight over them. A VLAN created " +
+			"here starts with no members.",
 		Attributes: map[string]schema.Attribute{
 			"vid": schema.Int64Attribute{
 				MarkdownDescription: "VLAN id, 1-4094. Changing it destroys and recreates the VLAN.",
@@ -58,21 +58,9 @@ func (r *vlanResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 					int64planmodifier.RequiresReplace(),
 				},
 			},
-			"tagged": schema.SetAttribute{
-				MarkdownDescription: "Ports carrying this VLAN tagged — trunks towards another switch.",
-				Optional:            true,
-				ElementType:         types.Int64Type,
-			},
-			"untagged": schema.SetAttribute{
-				MarkdownDescription: "Ports carrying this VLAN untagged — access ports. Setting a " +
-					"port here does not set its PVID; use `schaltwerk_zyxel_pvid` for that.",
-				Optional:    true,
-				ElementType: types.Int64Type,
-			},
 			"force": schema.BoolAttribute{
-				MarkdownDescription: "Bypass the safety check that refuses a change removing ports " +
-					"from the switch's management VLAN. Recovering from such a change needs " +
-					"physical access to the switch, so leave this off unless you have it.",
+				MarkdownDescription: "Bypass the safety check that refuses to delete the " +
+					"switch's management VLAN.",
 				Optional: true,
 				Computed: true,
 				Default:  booldefault.StaticBool(false),
@@ -99,10 +87,10 @@ func (r *vlanResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 	vid := int(plan.VID.ValueInt64())
 
-	// Refuse to adopt a VLAN that is already on the switch. The write path
-	// would happily modify it, but silently taking ownership of live
-	// configuration is how an apply reassigns traffic nobody asked it to
-	// touch. Reading the table costs no session.
+	// Refuse to adopt a VLAN already on the switch. Creating it here would be
+	// harmless — membership is not touched — but silently taking ownership of
+	// something nobody declared means a later destroy removes configuration
+	// this run never created. Reading the table costs no session.
 	existing, err := r.client.ReadVLANTable(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot read the switch's VLAN table", err.Error())
@@ -113,15 +101,18 @@ func (r *vlanResource) Create(ctx context.Context, req resource.CreateRequest, r
 			resp.Diagnostics.AddError(
 				fmt.Sprintf("VLAN %d already exists on this switch", vid),
 				fmt.Sprintf("Import it instead of creating it:\n\n"+
-					"  tofu import schaltwerk_zyxel_vlan.<name> %d\n\n"+
-					"Creating it here would overwrite the membership the switch "+
-					"currently has.", vid),
+					"  tofu import schaltwerk_zyxel_vlan.<name> %d", vid),
 			)
 			return
 		}
 	}
 
-	r.write(ctx, plan, &resp.Diagnostics, &resp.State)
+	config, err := r.client.EnsureVLAN(ctx, vid, plan.Force.ValueBool())
+	if err != nil {
+		addDriverError(&resp.Diagnostics, fmt.Sprintf("Cannot create VLAN %d", vid), err)
+		return
+	}
+	r.store(ctx, plan, config, &resp.Diagnostics, &resp.State)
 }
 
 func (r *vlanResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -131,8 +122,8 @@ func (r *vlanResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	// vlanEntry.xml is unauthenticated, so a refresh never claims the switch's
-	// single web session — planning cannot lock its owner out of the web UI.
+	// vlanEntry.xml is unauthenticated, so refreshing a VLAN never claims the
+	// switch's single web session.
 	entries, err := r.client.ReadVLANTable(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot read the switch's VLAN table", err.Error())
@@ -141,27 +132,35 @@ func (r *vlanResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	vid := int(state.VID.ValueInt64())
 	for _, entry := range entries {
-		if entry.VID != vid {
-			continue
-		}
-		resp.Diagnostics.Append(applyEntry(ctx, &state, entry)...)
-		if resp.Diagnostics.HasError() {
+		if entry.VID == vid {
+			state.Index = types.Int64Value(int64(entry.Index))
+			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return
 		}
-		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-		return
 	}
-	// Gone from the switch: let Terraform plan a fresh create.
 	resp.State.RemoveResource(ctx)
 }
 
+// Update has nothing to send: `vid` replaces the resource and `force` only
+// governs how the next write is checked.
 func (r *vlanResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan vlanModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	r.write(ctx, plan, &resp.Diagnostics, &resp.State)
+	entries, err := r.client.ReadVLANTable(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot read the switch's VLAN table", err.Error())
+		return
+	}
+	plan.Index = types.Int64Value(0)
+	for _, entry := range entries {
+		if entry.VID == int(plan.VID.ValueInt64()) {
+			plan.Index = types.Int64Value(int64(entry.Index))
+		}
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *vlanResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -170,9 +169,7 @@ func (r *vlanResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	_, err := r.client.DeleteVLAN(ctx, int(state.VID.ValueInt64()), state.Force.ValueBool())
-	if err != nil {
+	if _, err := r.client.DeleteVLAN(ctx, int(state.VID.ValueInt64()), state.Force.ValueBool()); err != nil {
 		addDriverError(&resp.Diagnostics,
 			fmt.Sprintf("Cannot delete VLAN %d", state.VID.ValueInt64()), err)
 	}
@@ -184,7 +181,7 @@ func (r *vlanResource) ImportState(ctx context.Context, req resource.ImportState
 		resp.Diagnostics.AddError(
 			"Invalid import id",
 			fmt.Sprintf("A VLAN is imported by its id, for example `tofu import "+
-				"schaltwerk_zyxel_vlan.iot 20`. Got %q.", req.ID),
+				"schaltwerk_zyxel_vlan.iot 1003`. Got %q.", req.ID),
 		)
 		return
 	}
@@ -192,75 +189,17 @@ func (r *vlanResource) ImportState(ctx context.Context, req resource.ImportState
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path("force"), false)...)
 }
 
-// write pushes the planned membership and stores what the switch confirmed.
-func (r *vlanResource) write(ctx context.Context, plan vlanModel, diags *diagList, state stateSetter) {
-	tagged, d := intsFromSet(ctx, plan.Tagged)
-	diags.Append(d...)
-	untagged, d := intsFromSet(ctx, plan.Untagged)
-	diags.Append(d...)
-	if diags.HasError() {
-		return
-	}
-
-	vid := int(plan.VID.ValueInt64())
-	config, err := r.client.WriteVLAN(ctx, zyxel.VLANEntry{
-		VID:      vid,
-		Tagged:   tagged,
-		Untagged: untagged,
-	}, plan.Force.ValueBool())
-	if err != nil {
-		addDriverError(diags, fmt.Sprintf("Cannot write VLAN %d", vid), err)
-		return
-	}
-
-	entry, ok := config.VLAN(vid)
+func (r *vlanResource) store(ctx context.Context, plan vlanModel, config zyxel.Config, diags *diagList, state stateSetter) {
+	entry, ok := config.VLAN(int(plan.VID.ValueInt64()))
 	if !ok {
 		diags.AddError(
-			fmt.Sprintf("VLAN %d is missing after a write the switch accepted", vid),
-			"The switch reported success but the VLAN is not in its table. "+
-				"Check the switch's web interface before running apply again.",
+			fmt.Sprintf("VLAN %d is missing after a write the switch accepted", plan.VID.ValueInt64()),
+			"The switch reported success but the VLAN is not in its table.",
 		)
 		return
 	}
-	diags.Append(applyEntry(ctx, &plan, entry)...)
-	if diags.HasError() {
-		return
-	}
+	plan.Index = types.Int64Value(int64(entry.Index))
 	diags.Append(state.Set(ctx, &plan)...)
-}
-
-// applyEntry copies what the switch reports into the model, so state always
-// holds the device's own view rather than what was asked for.
-//
-// The one exception is an omitted port list. `tagged` and `untagged` are
-// Optional and not Computed, so Terraform requires the value it gets back to
-// equal the one in the configuration: writing an empty set where the
-// configuration said nothing is an "inconsistent result after apply", and on
-// refresh it would show as a permanent diff. An absent list and an empty one
-// mean the same thing to the switch, so the configuration's spelling wins.
-func applyEntry(ctx context.Context, model *vlanModel, entry zyxel.VLANEntry) diagList {
-	var diags diagList
-	tagged, d := setOrKeepNull(ctx, entry.Tagged, model.Tagged)
-	diags.Append(d...)
-	untagged, d := setOrKeepNull(ctx, entry.Untagged, model.Untagged)
-	diags.Append(d...)
-	if diags.HasError() {
-		return diags
-	}
-	model.VID = types.Int64Value(int64(entry.VID))
-	model.Tagged = tagged
-	model.Untagged = untagged
-	model.Index = types.Int64Value(int64(entry.Index))
-	return diags
-}
-
-// setOrKeepNull turns the device's ports into a set, unless the device reports
-// none and the configuration left the attribute out — then it stays out.
-func setOrKeepNull(ctx context.Context, ports []int, configured types.Set) (types.Set, diagList) {
-	if len(ports) == 0 && configured.IsNull() {
-		return types.SetNull(types.Int64Type), nil
-	}
-	return setFromInts(ctx, ports)
 }
 
 // -- conversions -----------------------------------------------------------
@@ -291,6 +230,19 @@ func setFromInts(ctx context.Context, ports []int) (types.Set, diagList) {
 	return set, diags
 }
 
+// setOrKeepNull turns the device's answer into a set, unless the device
+// reports none and the configuration left the attribute out — then it stays
+// out. `tagged` and `untagged` are Optional and not Computed, so Terraform
+// requires the value it gets back to equal the one in the configuration:
+// writing an empty set where the configuration said nothing is an
+// "inconsistent result after apply", and on refresh a permanent diff.
+func setOrKeepNull(ctx context.Context, values []int, configured types.Set) (types.Set, diagList) {
+	if len(values) == 0 && configured.IsNull() {
+		return types.SetNull(types.Int64Type), nil
+	}
+	return setFromInts(ctx, values)
+}
+
 // addDriverError turns a driver failure into a diagnostic that says what to do
 // next, because "unsafe change refused" without the way out is just a wall.
 func addDriverError(diags *diagList, summary string, err error) {
@@ -301,9 +253,7 @@ func addDriverError(diags *diagList, summary string, err error) {
 			"physical access to the switch should it become unreachable.")
 	case errors.Is(err, zyxel.ErrInUseAsPVID):
 		diags.AddError(summary, err.Error()+
-			"\n\nDestroying a `schaltwerk_zyxel_pvid` resource deliberately leaves the "+
-			"port's native VLAN alone, so removing both at once cannot work. Point "+
-			"those ports at another VLAN and apply, then remove this VLAN.")
+			"\n\nPoint those ports at another VLAN and apply, then remove this one.")
 	case errors.Is(err, zyxel.ErrBusy):
 		diags.AddError(summary, err.Error()+
 			"\n\nThe switch serves one web session at a time. Close the browser tab "+

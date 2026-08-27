@@ -216,7 +216,12 @@ func guard(current Config, proposed []VLANEntry, proposedPVID map[int]int, force
 
 // -- writes ----------------------------------------------------------------
 
-// WriteVLAN creates or modifies one VLAN, then reads it back to confirm.
+// WriteVLAN creates or modifies one VLAN, membership included, then reads it
+// back to confirm.
+//
+// Port membership is normally owned by the port resources, which change only
+// their own bit. This writes a whole row at once and is what creates a VLAN
+// or repairs one wholesale.
 func (c *Client) WriteVLAN(ctx context.Context, entry VLANEntry, force bool) (Config, error) {
 	c.forget()
 	if err := validateVID(entry.VID); err != nil {
@@ -232,62 +237,13 @@ func (c *Client) WriteVLAN(ctx context.Context, entry VLANEntry, force bool) (Co
 		if err != nil {
 			return err
 		}
-		existing, exists := current.VLAN(entry.VID)
 
 		wanted := VLANEntry{VID: entry.VID, Name: entry.Name, Tagged: tagged, Untagged: untagged}
 		proposed := append(current.withoutVLAN(entry.VID), wanted)
 		if err := guard(current, proposed, current.PVID, force); err != nil {
 			return err
 		}
-
-		taggedMap := EncodePorts(tagged)
-		untaggedMap := EncodePorts(untagged)
-
-		var params []kv
-		if exists {
-			oldMembers := existing.Members()
-			newMembers := wanted.Members()
-			added, removed := []int{}, []int{}
-			for port := range newMembers {
-				if !oldMembers[port] {
-					added = append(added, port)
-				}
-			}
-			for port := range oldMembers {
-				if !newMembers[port] {
-					removed = append(removed, port)
-				}
-			}
-			sort.Ints(added)
-			sort.Ints(removed)
-			params = []kv{
-				s("action", "mod"),
-				n("vid", entry.VID),
-				n("vidx", existing.Index),
-				n("untagMbrs", untaggedMap),
-				n("tagMbrs", taggedMap),
-				n("addPbmp", EncodePorts(added)),
-				n("delPbmp", EncodePorts(removed)),
-				n("changePcnt", len(added)+len(removed)),
-				// The firmware names a VLAN by its own id; the web UI shows no
-				// free-text field for it.
-				n("name", entry.VID),
-				n("trunkBitMap", 0),
-			}
-		} else {
-			params = []kv{
-				s("action", "add"),
-				n("vid", entry.VID),
-				n("vidx", firstFreeIndex(current.VLANs)),
-				n("fid", 0),
-				n("untagMbrs", untaggedMap),
-				n("tagMbrs", taggedMap),
-				n("name", entry.VID),
-				n("trunkBitMap", 0),
-			}
-		}
-
-		if _, err := c.get(ctx, "zqvlanSet.cgi?"+query(params)); err != nil {
+		if err := c.applyVLANEntry(ctx, current, wanted); err != nil {
 			return err
 		}
 		result, err = c.verify(ctx, entry.VID, &wanted)
@@ -379,24 +335,7 @@ func (c *Client) WritePVID(ctx context.Context, wanted map[int]int, force bool) 
 			return nil
 		}
 
-		ports := make([]int, 0, len(merged))
-		for port := range merged {
-			ports = append(ports, port)
-		}
-		sort.Ints(ports)
-
-		params := make([]kv, 0, len(ports)+3)
-		for _, port := range ports {
-			// The firmware indexes these from zero.
-			params = append(params, n(fmt.Sprintf("vid%d", port-1), merged[port]))
-		}
-		params = append(params,
-			n("changePbmp", EncodePorts(changed)),
-			n("changePcnt", len(changed)),
-			n("trunkBitMap", 0),
-		)
-
-		if _, err := c.get(ctx, "zqvlanPvidSet.cgi?"+query(params)); err != nil {
+		if err := c.applyPVID(ctx, merged, changed); err != nil {
 			return err
 		}
 
@@ -466,4 +405,31 @@ func equalPorts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// applyPVID writes the native-VLAN table. The session must be held.
+//
+// The firmware wants every port's value on each write, not just the ones that
+// move, so the whole merged table goes out and changePbmp names what actually
+// changed.
+func (c *Client) applyPVID(ctx context.Context, merged map[int]int, changed []int) error {
+	ports := make([]int, 0, len(merged))
+	for port := range merged {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+
+	params := make([]kv, 0, len(ports)+3)
+	for _, port := range ports {
+		// The firmware indexes these from zero.
+		params = append(params, n(fmt.Sprintf("vid%d", port-1), merged[port]))
+	}
+	params = append(params,
+		n("changePbmp", EncodePorts(changed)),
+		n("changePcnt", len(changed)),
+		n("trunkBitMap", 0),
+	)
+
+	_, err := c.get(ctx, "zqvlanPvidSet.cgi?"+query(params))
+	return err
 }
