@@ -35,12 +35,17 @@ vet:
 	go vet ./...
 
 # install puts this platform's binary where the local OpenTofu will find it.
+#
+# CGO_ENABLED=0 matches `dist` exactly. Without it the two targets produce
+# different bytes for the same platform, and the .terraform.lock.hcl generated
+# from one rejects the binary produced by the other — a mismatch whose error
+# message says nothing about the cause.
 install: test
 	@set -e; \
 	os=$$(go env GOOS); arch=$$(go env GOARCH); \
 	dir="$(MIRROR)/$(ADDRESS)/$(VERSION)/$${os}_$${arch}"; \
 	mkdir -p "$$dir"; \
-	go build -ldflags "$(LDFLAGS)" -o "$$dir/$(BINARY)_v$(VERSION)" .; \
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o "$$dir/$(BINARY)_v$(VERSION)" .; \
 	echo "installed $(VERSION) for $${os}_$${arch} in $$dir"
 
 # dist builds every platform into ./dist, laid out as a filesystem mirror so

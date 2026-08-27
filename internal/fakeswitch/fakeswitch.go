@@ -56,6 +56,31 @@ type Switch struct {
 	Calls []string
 }
 
+// Seed replaces the emulated device's VLAN table and PVIDs. It takes the
+// table in the wire format /vlanEntry.xml serves, so a capture from real
+// hardware can be replayed verbatim.
+func (s *Switch) Seed(vlanXML string, pvid map[int]int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.vlans = nil
+	for _, record := range strings.Split(vlanXML, ";") {
+		fields := strings.Split(strings.TrimSpace(record), ",")
+		if len(fields) < 6 {
+			continue
+		}
+		s.vlans = append(s.vlans, VLAN{
+			Index: atoi(fields[0]), VID: atoi(fields[1]), Name: fields[2],
+			Tagged: decode(atoi(fields[4])), Untagged: decode(atoi(fields[5])),
+		})
+	}
+	s.pvid = map[int]int{}
+	for port, vid := range pvid {
+		s.pvid[port] = vid
+	}
+	s.PortCount = len(s.pvid)
+}
+
 // New builds a switch seeded with the configuration captured from the real
 // gs1200 at 192.168.2.6.
 func New(password string) *Switch {
