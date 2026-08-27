@@ -29,6 +29,38 @@ var (
 	firmwareRE = regexp.MustCompile(`firmwareStr\s*:\s*\[\s*"([^"]*)"`)
 )
 
+// tlsConfig builds the TLS settings this hardware actually needs.
+//
+// The GS1200 offers exactly one cipher suite: TLS 1.2 with
+// AES128-GCM-SHA256 over an RSA key exchange. Go 1.22 removed every
+// RSA-key-exchange suite from the client's default list — they provide no
+// forward secrecy — so a stock Go client and this switch share nothing and
+// the handshake fails outright, with `remote error: tls: handshake failure`
+// and no hint that the cause is a cipher list. curl still offers those
+// suites, which is why curl reaches the switch and an unconfigured Go client
+// does not.
+//
+// The firmware is the last of its line and takes no updates, so the choice is
+// to name that suite explicitly or not to speak to the device at all. The
+// modern suites stay first in the list: if a proxy with a real certificate
+// ever fronts the switch, the better option is what gets negotiated.
+func tlsConfig(verifyTLS bool) *tls.Config {
+	return &tls.Config{
+		// These switches ship a self-signed certificate that cannot be
+		// replaced. Verification stays configurable for a fronting proxy.
+		InsecureSkipVerify: !verifyTLS, //nolint:gosec // see VerifyTLS
+		MinVersion:         tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			// The only suite a GS1200 will agree to.
+			tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+		},
+	}
+}
+
 // deviceLocks serialises access to each physical switch.
 //
 // The GS1200 serves one web session at a time. Terraform evaluates resources
@@ -111,7 +143,7 @@ func NewClient(host, password, scheme string, verifyTLS bool, timeout time.Durat
 			Jar:     jar,
 			Timeout: timeout,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: !verifyTLS}, //nolint:gosec // see VerifyTLS
+				TLSClientConfig: tlsConfig(verifyTLS),
 			},
 			// The CGI endpoints answer with redirect stubs; following them
 			// tells us nothing and costs a round trip on a slow CPU.
