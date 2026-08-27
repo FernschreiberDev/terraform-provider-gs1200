@@ -45,6 +45,14 @@ Tout a été dérivé du JavaScript du firmware d'un GS1200-5 v3 en
   prise. C'est la partie la plus testée du code.
 - **Les CGI répondent 200 quoi qu'il arrive.** La réponse ne prouve rien :
   chaque écriture est relue et vérifiée contre ce qui était demandé.
+- **Il referme ses connexions sans prévenir.** Le GS1200 abandonne vite une
+  connexion laissée en réserve. Go réémet tout seul une requête idempotente
+  dans ce cas, mais jamais un POST — et le login en est un. Une lecture de VLAN
+  en GET laisse donc une connexion que le login suivant reprend, morte. Rare en
+  série, fréquent dès que deux switchs sont configurés de front. Le provider
+  réémet ces requêtes-là, et seulement elles : le transport ne signale cette
+  erreur qu'avant d'avoir écrit quoi que ce soit, donc rejouer ne peut pas
+  répéter un effet.
 - **Son TLS date.** Le GS1200 n'accepte qu'une seule suite : TLS 1.2 avec
   `AES128-GCM-SHA256` sur un échange de clés RSA. Go 1.22 a retiré toutes les
   suites à échange RSA de sa liste par défaut, faute de confidentialité

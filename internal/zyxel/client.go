@@ -144,6 +144,14 @@ func NewClient(host, password, scheme string, verifyTLS bool, timeout time.Durat
 			Timeout: timeout,
 			Transport: &http.Transport{
 				TLSClientConfig: tlsConfig(verifyTLS),
+				// The switch drops idle connections quickly and without
+				// warning. Discarding them first costs one TLS handshake;
+				// finding out by sending a request costs a retry, and for a
+				// POST it used to cost the whole operation.
+				IdleConnTimeout: 2 * time.Second,
+				// The device serves one connection at a time, so a larger
+				// pool only holds more connections it has already closed.
+				MaxIdleConnsPerHost: 1,
 			},
 			// The CGI endpoints answer with redirect stubs; following them
 			// tells us nothing and costs a round trip on a slow CPU.
@@ -158,39 +166,79 @@ func (c *Client) baseURL() string {
 	return fmt.Sprintf("%s://%s", c.Scheme, c.Host)
 }
 
+// staleConnAttempts is how many times a request is re-sent after finding a
+// dead connection in the pool. Two retries cover a stale connection followed
+// by an unlucky second pick; beyond that the device is genuinely unwell.
+const staleConnAttempts = 3
+
+// staleConnMessage is what the transport says when it took a keep-alive
+// connection from the pool and found the server had closed it. Go once
+// exported a sentinel for this; it no longer does, so the message is the only
+// handle available.
+const staleConnMessage = "server closed idle connection"
+
+// isStaleConn reports the one failure it is provably safe to retry.
+//
+// The transport raises it only *before writing anything*: the request never
+// reached the device, so re-sending it cannot repeat a side effect — which is
+// what makes retrying the login POST sound. Deliberately narrow; no other
+// error is retried.
+func isStaleConn(err error) bool {
+	return strings.Contains(err.Error(), staleConnMessage)
+}
+
 // fetch performs one request and returns the body as text.
+//
+// It retries a connection the switch closed while it sat idle in the pool.
+// The GS1200 drops idle connections quickly, and Go re-sends only idempotent
+// requests on its own: a GET recovers silently, a POST fails outright. The
+// login is a POST, so every session could die on a connection left over from
+// the previous unauthenticated read — rarely when work is serial, often when
+// two switches are configured at once.
 func (c *Client) fetch(ctx context.Context, method, path, body, contentType string) (string, error) {
 	target := c.baseURL() + "/" + strings.TrimPrefix(path, "/")
 
-	var reader io.Reader
-	if method == http.MethodPost {
-		reader = strings.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, target, reader)
-	if err != nil {
-		return "", fmt.Errorf("cannot build a request for %s: %w", path, err)
-	}
-	req.Header.Set("User-Agent", "terraform-provider-schaltwerk")
-	if method == http.MethodPost {
-		req.Header.Set("Content-Type", contentType)
-	}
+	var lastErr error
+	for attempt := 1; attempt <= staleConnAttempts; attempt++ {
+		// Rebuilt each time: a request body is a reader, and a spent one
+		// would re-send an empty POST.
+		var reader io.Reader
+		if method == http.MethodPost {
+			reader = strings.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, target, reader)
+		if err != nil {
+			return "", fmt.Errorf("cannot build a request for %s: %w", path, err)
+		}
+		req.Header.Set("User-Agent", "terraform-provider-schaltwerk")
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", contentType)
+		}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("cannot reach %s: %w", c.Host, err)
-	}
-	defer resp.Body.Close()
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < staleConnAttempts && isStaleConn(err) {
+				// Nothing to back off from: the connection was already gone,
+				// and the next attempt opens a fresh one.
+				continue
+			}
+			return "", fmt.Errorf("cannot reach %s: %w", c.Host, err)
+		}
 
-	payload, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("cannot read the answer from %s: %w", path, err)
+		payload, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return "", fmt.Errorf("cannot read the answer from %s: %w", path, readErr)
+		}
+		// 3xx is the firmware's normal answer to a CGI write, so only 4xx/5xx
+		// is a failure worth reporting.
+		if resp.StatusCode >= 400 {
+			return "", fmt.Errorf("%s returned HTTP %d", path, resp.StatusCode)
+		}
+		return string(payload), nil
 	}
-	// 3xx is the firmware's normal answer to a CGI write, so only 4xx/5xx is
-	// a failure worth reporting.
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("%s returned HTTP %d", path, resp.StatusCode)
-	}
-	return string(payload), nil
+	return "", fmt.Errorf("cannot reach %s: %w", c.Host, lastErr)
 }
 
 func (c *Client) get(ctx context.Context, path string) (string, error) {
