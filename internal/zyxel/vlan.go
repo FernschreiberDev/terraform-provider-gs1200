@@ -107,7 +107,19 @@ func (c *Client) readState(ctx context.Context) (Config, error) {
 // that does require a session, so when no password is configured the result
 // is returned with Partial set rather than failing: knowing the VLANs without
 // the PVIDs is still worth having, and it costs the switch nothing.
+//
+// The authenticated answer is cached, because every call to it claims the
+// device's single web session and locks its owner out of the web UI for the
+// duration. A refresh over a five-port switch asks once per port, and ten
+// login/logout cycles on a slow CPU is both slow and rude. The cache is
+// dropped by any write and expires on its own; a provider process lives only
+// for one CLI command, so nothing else can be changing the switch underneath
+// it that was not already a race.
 func (c *Client) ReadConfig(ctx context.Context) (Config, error) {
+	if cached, ok := c.cachedConfig(); ok {
+		return cached, nil
+	}
+
 	entries, err := c.ReadVLANTable(ctx)
 	if err != nil {
 		return Config{}, err
@@ -130,6 +142,9 @@ func (c *Client) ReadConfig(ctx context.Context) (Config, error) {
 		config, err = c.readState(ctx)
 		return err
 	})
+	if err == nil {
+		c.cacheConfig(config)
+	}
 	return config, err
 }
 
@@ -203,6 +218,7 @@ func guard(current Config, proposed []VLANEntry, proposedPVID map[int]int, force
 
 // WriteVLAN creates or modifies one VLAN, then reads it back to confirm.
 func (c *Client) WriteVLAN(ctx context.Context, entry VLANEntry, force bool) (Config, error) {
+	c.forget()
 	if err := validateVID(entry.VID); err != nil {
 		return Config{}, err
 	}
@@ -282,6 +298,7 @@ func (c *Client) WriteVLAN(ctx context.Context, entry VLANEntry, force bool) (Co
 
 // DeleteVLAN removes one VLAN, then reads it back to confirm.
 func (c *Client) DeleteVLAN(ctx context.Context, vid int, force bool) (Config, error) {
+	c.forget()
 	var result Config
 	err := c.withSession(ctx, func(ctx context.Context) error {
 		current, err := c.readState(ctx)
@@ -332,6 +349,7 @@ func (c *Client) DeleteVLAN(ctx context.Context, vid int, force bool) (Config, e
 // theirs: the firmware wants the whole table on every write, so the current
 // values are read and merged rather than assumed.
 func (c *Client) WritePVID(ctx context.Context, wanted map[int]int, force bool) (Config, error) {
+	c.forget()
 	var result Config
 	err := c.withSession(ctx, func(ctx context.Context) error {
 		current, err := c.readState(ctx)

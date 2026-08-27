@@ -31,12 +31,14 @@ Tout a été dérivé du JavaScript du firmware d'un GS1200-5 v3 en
 `V1.00(ACPS.2)C0`. Quatre points comptent :
 
 - **Une seule session web à la fois.** Tant qu'une session est ouverte,
-  personne d'autre n'atteint l'interface — y compris toi. Le provider ouvre
-  une session seulement pour écrire, et la referme toujours, même quand
-  l'`apply` est interrompu.
+  personne d'autre n'atteint l'interface — y compris toi. Le provider n'en
+  ouvre une que pour écrire, ou pour lire les PVID, et la referme toujours,
+  même quand l'`apply` est interrompu. Les lectures authentifiées sont mises
+  en cache pour la durée d'une commande : un switch à cinq ports serait sinon
+  verrouillé cinq fois de suite par un seul `plan`.
 - **La lecture des VLANs ne demande pas de session.** `/vlanEntry.xml` répond
   à qui le demande. C'est une faiblesse du firmware, mais elle a une
-  conséquence heureuse : un `tofu plan` ne verrouille jamais ton switch.
+  conséquence heureuse : rafraîchir une VLAN ne verrouille jamais ton switch.
 - **Les bitmaps de ports sont décalés de un.** Le port 1 est le bit 1, pas le
   bit 0. Se tromper d'un cran déplace silencieusement chaque port d'une
   position — sur une écriture, cela réaffecte du trafic réel à la mauvaise

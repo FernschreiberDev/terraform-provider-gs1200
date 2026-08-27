@@ -56,6 +56,37 @@ type Client struct {
 
 	http     *http.Client
 	loggedIn bool
+
+	// cache holds the last authenticated read. See ReadConfig for why.
+	cacheMu  sync.Mutex
+	cached   *Config
+	cachedAt time.Time
+}
+
+// configTTL bounds how long a cached authenticated read stays usable. Writes
+// invalidate it outright; this only limits how stale a long refresh can get.
+const configTTL = 60 * time.Second
+
+func (c *Client) cachedConfig() (Config, bool) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.cached == nil || time.Since(c.cachedAt) > configTTL {
+		return Config{}, false
+	}
+	return *c.cached, true
+}
+
+func (c *Client) cacheConfig(config Config) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	c.cached, c.cachedAt = &config, time.Now()
+}
+
+// forget drops the cache, so the next read goes back to the device.
+func (c *Client) forget() {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	c.cached = nil
 }
 
 // NewClient builds a client. It opens no connection.
