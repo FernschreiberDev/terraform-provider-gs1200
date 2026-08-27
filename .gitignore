@@ -1,0 +1,9 @@
+# Build output
+/terraform-provider-schaltwerk
+/dist/
+
+# OpenTofu working directories from manual testing
+.terraform/
+*.tfstate
+*.tfstate.backup
+.tofurc
