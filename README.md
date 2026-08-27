@@ -266,5 +266,11 @@ Les tests ne touchent aucun matériel. Deux choses les rendent sérieux :
 go run ./cmd/fakeswitch -addr 127.0.0.1:8099 -password s3cret
 ```
 
-En reconstruisant la même version, `.terraform.lock.hcl` épingle l'ancien
-binaire : supprime-le et relance `tofu init`.
+La compilation est reproductible : à source égale, octets égaux. Il a fallu
+`-buildvcs=false` pour cela, Go estampillant par défaut le commit courant dans
+le binaire — le même code compilé avant et après un commit donnait des octets
+différents, et le lockfile généré depuis l'un rejetait l'autre en accusant la
+somme de contrôle sans jamais nommer git.
+
+`make install` copie depuis `dist` au lieu de recompiler, pour la même raison :
+un seul artefact, pas deux qu'on espère identiques.

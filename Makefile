@@ -4,7 +4,7 @@
 # directory laid out the way a registry mirror would be, which is what
 # `filesystem_mirror` in a .tofurc points at.
 
-VERSION ?= 0.2.2
+VERSION ?= 0.2.3
 BINARY  := terraform-provider-schaltwerk
 # The address in required_providers. Nothing is fetched from it; it is the key
 # the binary is filed under.
@@ -18,12 +18,24 @@ PLATFORMS := darwin_arm64 linux_amd64 linux_arm64
 
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
+# Compilation reproductible : à source égale, octets égaux.
+#
+# -buildvcs=false parce que Go estampille par défaut le commit courant et
+# l'état de l'arbre dans le binaire. Le même code compilé avant et après un
+# commit donne alors des octets différents, le lockfile généré depuis l'un
+# rejette l'autre, et l'erreur parle de somme de contrôle sans jamais nommer
+# git. La version est déjà stampée explicitement au-dessus.
+#
+# -trimpath retire les chemins absolus de la machine de compilation, qui
+# varient d'un poste à l'autre.
+BUILDFLAGS := -trimpath -buildvcs=false
+
 .PHONY: all build test fmt vet install dist clean
 
 all: fmt vet test build
 
 build:
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
+	go build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 test:
 	go test ./...
@@ -34,18 +46,21 @@ fmt:
 vet:
 	go vet ./...
 
-# install puts this platform's binary where the local OpenTofu will find it.
+# install copies this platform's binary out of dist, where OpenTofu will
+# find it.
 #
-# CGO_ENABLED=0 matches `dist` exactly. Without it the two targets produce
-# different bytes for the same platform, and the .terraform.lock.hcl generated
-# from one rejects the binary produced by the other — a mismatch whose error
-# message says nothing about the cause.
-install: test
+# It copies rather than rebuilds on purpose. Two `go build` invocations with
+# the same flags are not guaranteed to produce the same bytes, and a lockfile
+# generated from dist then rejects a locally rebuilt binary with an error that
+# blames the checksum rather than the duplication. One build, one artefact.
+install: dist
 	@set -e; \
 	os=$$(go env GOOS); arch=$$(go env GOARCH); \
+	src="dist/$(ADDRESS)/$(VERSION)/$${os}_$${arch}/$(BINARY)_v$(VERSION)"; \
 	dir="$(MIRROR)/$(ADDRESS)/$(VERSION)/$${os}_$${arch}"; \
+	test -f "$$src" || { echo "dist ne contient pas $${os}_$${arch}"; exit 1; }; \
 	mkdir -p "$$dir"; \
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o "$$dir/$(BINARY)_v$(VERSION)" .; \
+	cp "$$src" "$$dir/"; \
 	echo "installed $(VERSION) for $${os}_$${arch} in $$dir"
 
 # dist builds every platform into ./dist, laid out as a filesystem mirror so
@@ -58,7 +73,7 @@ dist: test
 	  dir="dist/$(ADDRESS)/$(VERSION)/$$platform"; \
 	  mkdir -p "$$dir"; \
 	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
-	    go build -ldflags "$(LDFLAGS)" -o "$$dir/$(BINARY)_v$(VERSION)" .; \
+	    go build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o "$$dir/$(BINARY)_v$(VERSION)" .; \
 	  echo "built $$platform"; \
 	done; \
 	find dist -type f -exec shasum -a 256 {} \; > dist/SHA256SUMS
