@@ -22,9 +22,13 @@ func main() {
 	password := flag.String("password", "secret", "web-interface password to accept")
 	vlans := flag.String("vlans", "", "VLAN table in /vlanEntry.xml wire format; empty keeps the captured gs1200 one")
 	pvids := flag.String("pvids", "", "comma-separated PVID per port, starting at port 1")
+	name := flag.String("name", "", "device name; empty keeps the captured one")
 	flag.Parse()
 
 	device := fakeswitch.New(*password)
+	if *name != "" {
+		device.SysName = *name
+	}
 	if *vlans != "" && *pvids != "" {
 		table := map[int]int{}
 		for index, raw := range strings.Split(*pvids, ",") {

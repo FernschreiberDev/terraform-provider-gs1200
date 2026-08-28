@@ -16,6 +16,11 @@ circuits sont réellement basculés, par opposition au schéma qui les décrit.
 | Par port : activation, vitesse/duplex, contrôle de flux | oui | oui |
 | Nom de l'appareil | oui | oui |
 | Prévention de boucle, storm control | oui | oui |
+| Par port : débits entrant et sortant (kbps) | oui | oui |
+| IGMP snooping, drop du multicast inconnu, port routeur statique | oui | oui |
+| SNMP v1/v2c, LED, EEE (802.3az) | oui | oui |
+| Isolation de ports (uplink unique) | oui | oui |
+| VLAN de management | oui | — |
 | Identité : modèle, révision, firmware, MAC, passerelle, uptime | oui | — |
 | État réel des liens : présence et débit négocié | oui | — |
 | Modèle, firmware, VLAN de management | oui | — |
@@ -246,8 +251,10 @@ couvre le nombre de switchs.
 ### `schaltwerk_zyxel_system`
 
 Le switch lui-même : `name`, `loop_prevention`, `storm_control`,
-`storm_control_pps`, `force`. Calculés : `model`, `hardware`, `firmware`,
-`mac`. Il n'y en a qu'un par switch, donc la ressource ne prend pas
+`storm_control_pps`, `igmp_snooping`, `igmp_unknown_multicast_drop`,
+`igmp_static_router_port`, `led`, `energy_efficient_ethernet`, `snmp`,
+`port_isolation_uplink`, `force`. Calculés : `model`, `hardware`, `firmware`,
+`mac`, `management_vlan`. Il n'y en a qu'un par switch, donc la ressource ne prend pas
 d'identifiant.
 
 Un attribut laissé de côté garde ce que le switch a déjà : cette ressource
@@ -259,6 +266,17 @@ qu'inventée : 1 à 14 caractères, lettres, chiffres, tiret ou souligné.
 Couper `loop_prevention` est refusé sans `force`. Une boucle inonde le
 segment — et c'est cette inondation qui vous empêcherait d'atteindre le switch
 pour revenir en arrière.
+
+Couper `snmp` l'est aussi : tout ce qui interroge ce switch devient aveugle, et
+ce qui cesse de fonctionner est un tableau de bord que personne ne regarde au
+moment de l'apply.
+
+`management_vlan` est en lecture seule à dessein. Le changer est la façon de
+perdre un switch, et le provider trancherait sa propre connexion au milieu de
+sa propre écriture.
+
+`energy_efficient_ethernet` s'applique à tous les ports d'un coup sur ce
+matériel, et le switch met une dizaine de secondes à se stabiliser.
 
 ### `data "schaltwerk_zyxel_switch"`
 
@@ -286,10 +304,14 @@ familles sont volontairement absentes :
 - **Le mot de passe.** Une ressource qui fait tourner l'identifiant dont le
   provider se sert pour se connecter est un piège à soi-même.
 
-Le reste — QoS 802.1p et par port, agrégation de liens, mirroring, IGMP
-snooping, jumbo frames, EEE, LED, délai HTTP, MAC statiques, diagnostic de
-câble — est atteignable : chaque page a été relevée, il ne manque que le même
-travail de protocole que pour les VLANs.
+Ce qui reste hors du provider et qui pourrait y entrer — QoS 802.1p et par
+port, agrégation de liens, mirroring, jumbo frames, délai d'inactivité HTTP,
+communautés SNMP, MAC statiques, diagnostic de câble. Chaque page a été
+relevée ; il ne manque que le même travail de protocole que pour les VLANs.
+
+Le diagnostic de câble mérite une note : c'est un test actif qui interrompt
+brièvement le lien. En faire un data source, rafraîchi à chaque plan, couperait
+le réseau à chaque plan.
 
 ## Développement
 

@@ -33,10 +33,19 @@ type systemModel struct {
 	StormControlPPS types.Int64  `tfsdk:"storm_control_pps"`
 	Force           types.Bool   `tfsdk:"force"`
 
-	Model    types.String `tfsdk:"model"`
-	Hardware types.String `tfsdk:"hardware"`
-	Firmware types.String `tfsdk:"firmware"`
-	MAC      types.String `tfsdk:"mac"`
+	IGMPSnooping    types.Bool  `tfsdk:"igmp_snooping"`
+	IGMPUnknownDrop types.Bool  `tfsdk:"igmp_unknown_multicast_drop"`
+	IGMPRouterPort  types.Int64 `tfsdk:"igmp_static_router_port"`
+	LED             types.Bool  `tfsdk:"led"`
+	EEE             types.Bool  `tfsdk:"energy_efficient_ethernet"`
+	SNMP            types.Bool  `tfsdk:"snmp"`
+	IsolationUplink types.Int64 `tfsdk:"port_isolation_uplink"`
+
+	ManagementVLAN types.Int64  `tfsdk:"management_vlan"`
+	Model          types.String `tfsdk:"model"`
+	Hardware       types.String `tfsdk:"hardware"`
+	Firmware       types.String `tfsdk:"firmware"`
+	MAC            types.String `tfsdk:"mac"`
 }
 
 func (r *systemResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -89,6 +98,60 @@ func (r *systemResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Default:             booldefault.StaticBool(false),
 			},
 
+			"igmp_snooping": schema.BoolAttribute{
+				MarkdownDescription: "Learn which ports asked for which multicast groups, and " +
+					"send each group only there instead of flooding every port.",
+				Optional: true,
+				Computed: true,
+			},
+			"igmp_unknown_multicast_drop": schema.BoolAttribute{
+				MarkdownDescription: "Discard multicast nobody subscribed to, rather than " +
+					"flooding it. Only meaningful while `igmp_snooping` is on.",
+				Optional: true,
+				Computed: true,
+			},
+			"igmp_static_router_port": schema.Int64Attribute{
+				MarkdownDescription: "Port where the multicast router sits, `0` to discover it " +
+					"automatically — which is what this hardware does by default.",
+				Optional:   true,
+				Computed:   true,
+				Validators: []validator.Int64{int64validator.Between(0, 32)},
+			},
+			"led": schema.BoolAttribute{
+				MarkdownDescription: "The firmware's own Disable/Enable control for the panel " +
+					"lights. Both switches in this fleet report it off.",
+				Optional: true,
+				Computed: true,
+			},
+			"energy_efficient_ethernet": schema.BoolAttribute{
+				MarkdownDescription: "802.3az. Applied to every port at once on this hardware, " +
+					"and the switch takes about ten seconds to settle after the change.",
+				Optional: true,
+				Computed: true,
+			},
+			"snmp": schema.BoolAttribute{
+				MarkdownDescription: "SNMP v1 and v2c, which the firmware switches together.\n\n" +
+					"Turning it off is refused unless `force` is set: anything polling this " +
+					"switch goes blind, and what stops working is a dashboard nobody is " +
+					"watching at the moment of the apply.",
+				Optional: true,
+				Computed: true,
+			},
+			"port_isolation_uplink": schema.Int64Attribute{
+				MarkdownDescription: "`0` lets every port talk to every other. Any other value " +
+					"names the single port the others may reach — a guest-network arrangement " +
+					"where devices see the uplink and nothing else.",
+				Optional:   true,
+				Computed:   true,
+				Validators: []validator.Int64{int64validator.Between(0, 32)},
+			},
+
+			"management_vlan": schema.Int64Attribute{
+				Computed: true,
+				MarkdownDescription: "The VLAN carrying the switch's own traffic. Read-only " +
+					"here on purpose: changing it is how a switch is lost, and the provider " +
+					"would sever its own connection halfway through its own write.",
+			},
 			"model":    schema.StringAttribute{Computed: true, MarkdownDescription: "Model, as the switch reports it."},
 			"hardware": schema.StringAttribute{Computed: true, MarkdownDescription: "Hardware revision."},
 			"firmware": schema.StringAttribute{Computed: true, MarkdownDescription: "Firmware version."},
@@ -127,8 +190,13 @@ func (r *systemResource) Read(ctx context.Context, req resource.ReadRequest, res
 		addDriverError(&resp.Diagnostics, "Cannot read the switch's protection settings", err)
 		return
 	}
+	management, err := r.client.ReadManagement(ctx)
+	if err != nil {
+		addDriverError(&resp.Diagnostics, "Cannot read the switch's management settings", err)
+		return
+	}
 
-	applySystem(&state, info, settings)
+	applySystem(&state, info, settings, management)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -204,11 +272,57 @@ func (r *systemResource) write(ctx context.Context, plan systemModel, diags *dia
 		settings.LoopPrevention, settings.StormControl, settings.StormRatePPS = loop, storm, rate
 	}
 
-	applySystem(&plan, info, settings)
+	management, err := r.client.ReadManagement(ctx)
+	if err != nil {
+		addDriverError(diags, "Cannot read the switch's management settings", err)
+		return
+	}
+
+	// Whatever the configuration leaves out keeps the switch's current value.
+	wanted := management
+	if v := plan.IGMPSnooping; !v.IsNull() && !v.IsUnknown() {
+		wanted.IGMPSnooping = v.ValueBool()
+	}
+	if v := plan.IGMPUnknownDrop; !v.IsNull() && !v.IsUnknown() {
+		wanted.IGMPUnknownDrop = v.ValueBool()
+	}
+	if v := plan.IGMPRouterPort; !v.IsNull() && !v.IsUnknown() {
+		wanted.IGMPStaticRouterPort = int(v.ValueInt64())
+	}
+	if v := plan.LED; !v.IsNull() && !v.IsUnknown() {
+		wanted.LED = v.ValueBool()
+	}
+	if v := plan.EEE; !v.IsNull() && !v.IsUnknown() {
+		wanted.EEE = v.ValueBool()
+	}
+	if v := plan.SNMP; !v.IsNull() && !v.IsUnknown() {
+		wanted.SNMPEnabled = v.ValueBool()
+	}
+	if v := plan.IsolationUplink; !v.IsNull() && !v.IsUnknown() {
+		wanted.PortIsolationUplink = int(v.ValueInt64())
+	}
+
+	if wanted.IGMPSnooping != management.IGMPSnooping ||
+		wanted.IGMPUnknownDrop != management.IGMPUnknownDrop ||
+		wanted.IGMPStaticRouterPort != management.IGMPStaticRouterPort ||
+		wanted.LED != management.LED || wanted.EEE != management.EEE ||
+		wanted.SNMPEnabled != management.SNMPEnabled ||
+		wanted.PortIsolationUplink != management.PortIsolationUplink {
+		after, err := r.client.WriteManagement(ctx, wanted, plan.Force.ValueBool())
+		if err != nil {
+			addDriverError(diags, "Cannot change the switch's management settings", err)
+			return
+		}
+		management = after
+	} else {
+		management = wanted
+	}
+
+	applySystem(&plan, info, settings, management)
 	diags.Append(state.Set(ctx, &plan)...)
 }
 
-func applySystem(model *systemModel, info zyxel.DeviceInfo, settings zyxel.SwitchSettings) {
+func applySystem(model *systemModel, info zyxel.DeviceInfo, settings zyxel.SwitchSettings, management zyxel.Management) {
 	model.Name = types.StringValue(info.Name)
 	model.Model = types.StringValue(info.Model)
 	model.Hardware = types.StringValue(info.Hardware)
@@ -217,4 +331,13 @@ func applySystem(model *systemModel, info zyxel.DeviceInfo, settings zyxel.Switc
 	model.LoopPrevention = types.BoolValue(settings.LoopPrevention)
 	model.StormControl = types.BoolValue(settings.StormControl)
 	model.StormControlPPS = types.Int64Value(int64(settings.StormRatePPS))
+
+	model.IGMPSnooping = types.BoolValue(management.IGMPSnooping)
+	model.IGMPUnknownDrop = types.BoolValue(management.IGMPUnknownDrop)
+	model.IGMPRouterPort = types.Int64Value(int64(management.IGMPStaticRouterPort))
+	model.LED = types.BoolValue(management.LED)
+	model.EEE = types.BoolValue(management.EEE)
+	model.SNMP = types.BoolValue(management.SNMPEnabled)
+	model.IsolationUplink = types.Int64Value(int64(management.PortIsolationUplink))
+	model.ManagementVLAN = types.Int64Value(int64(management.ManagementVLAN))
 }

@@ -44,6 +44,8 @@ type portModel struct {
 	Enabled     types.Bool   `tfsdk:"enabled"`
 	Speed       types.String `tfsdk:"speed"`
 	FlowControl types.Bool   `tfsdk:"flow_control"`
+	IngressKbps types.Int64  `tfsdk:"ingress_rate_kbps"`
+	EgressKbps  types.Int64  `tfsdk:"egress_rate_kbps"`
 }
 
 func (r *portResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -121,6 +123,21 @@ func (r *portResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Computed:   true,
 				Validators: []validator.String{stringvalidator.OneOf(zyxel.Speeds()...)},
 			},
+			"ingress_rate_kbps": schema.Int64Attribute{
+				MarkdownDescription: "Cap on traffic entering this port, in kbps. `0` lifts " +
+					"the cap.\n\n" +
+					"The firmware stores rates in steps of 32 kbps, so a figure it cannot " +
+					"represent exactly is refused rather than quietly rounded. Range: 32 to " +
+					"1000000.",
+				Optional: true,
+				Computed: true,
+			},
+			"egress_rate_kbps": schema.Int64Attribute{
+				MarkdownDescription: "Cap on traffic leaving this port, in kbps. `0` lifts the " +
+					"cap. Same 32 kbps grid as `ingress_rate_kbps`.",
+				Optional: true,
+				Computed: true,
+			},
 			"flow_control": schema.BoolAttribute{
 				MarkdownDescription: "802.3x pause frames. Off throughout on this hardware, " +
 					"and rarely worth turning on outside storage networks.",
@@ -186,6 +203,13 @@ func (r *portResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if electrical, ok := settings.Port(port); ok {
 		applySettings(&state, electrical)
 	}
+
+	management, err := r.client.ReadManagement(ctx)
+	if err != nil {
+		addDriverError(&resp.Diagnostics, "Cannot read the port's rate limits", err)
+		return
+	}
+	applyRates(&state, management, port)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -295,7 +319,46 @@ func (r *portResource) write(ctx context.Context, plan portModel, diags *diagLis
 	}
 	applySettings(&plan, wanted)
 
+	// Rate limits live on a third page again, and go out only when asked for.
+	management, err := r.client.ReadManagement(ctx)
+	if err != nil {
+		addDriverError(diags, "Cannot read the port's rate limits", err)
+		return
+	}
+	if port > len(management.IngressKbps) {
+		diags.AddError(
+			fmt.Sprintf("Port %d has no rate limit entry on this switch", port),
+			"The switch lists fewer ports than this resource addresses.")
+		return
+	}
+	wantIn, wantOut := management.IngressKbps[port-1], management.EgressKbps[port-1]
+	if v := plan.IngressKbps; !v.IsNull() && !v.IsUnknown() {
+		wantIn = int(v.ValueInt64())
+	}
+	if v := plan.EgressKbps; !v.IsNull() && !v.IsUnknown() {
+		wantOut = int(v.ValueInt64())
+	}
+	if wantIn != management.IngressKbps[port-1] || wantOut != management.EgressKbps[port-1] {
+		after, err := r.client.WritePortRates(ctx, port, wantIn, wantOut)
+		if err != nil {
+			addDriverError(diags, fmt.Sprintf("Cannot cap port %d", port), err)
+			return
+		}
+		management = after
+	}
+	applyRates(&plan, management, port)
+
 	diags.Append(state.Set(ctx, &plan)...)
+}
+
+// applyRates copies the switch's own view of a port's caps into the model.
+func applyRates(model *portModel, management zyxel.Management, port int) {
+	if port-1 < len(management.IngressKbps) {
+		model.IngressKbps = types.Int64Value(int64(management.IngressKbps[port-1]))
+	}
+	if port-1 < len(management.EgressKbps) {
+		model.EgressKbps = types.Int64Value(int64(management.EgressKbps[port-1]))
+	}
 }
 
 // applySettings copies the switch's own view of a port's electrical settings

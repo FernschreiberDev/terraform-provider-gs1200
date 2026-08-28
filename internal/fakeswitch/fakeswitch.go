@@ -55,9 +55,21 @@ type Switch struct {
 	loopPrevention bool
 	stormControl   bool
 	stormRatePPS   int
-	portEnabled    []bool
-	portSpeed      []int
-	portFlow       []bool
+	// Réglages à l'échelle de l'appareil, éparpillés sur trois pages par le
+	// firmware.
+	eee           bool
+	led           bool
+	snmp          bool
+	mgmtVLAN      int
+	igmpSnooping  bool
+	igmpDrop      bool
+	igmpRouter    int
+	portIsolation int
+	ingressUnits  []int
+	egressUnits   []int
+	portEnabled   []bool
+	portSpeed     []int
+	portFlow      []bool
 
 	// token is the single session. Empty means nobody holds it, which is what
 	// makes a missed logout visible instead of merely slow.
@@ -105,6 +117,12 @@ func New(password string) *Switch {
 		Firmware:       "V1.00(ACPS.2)C0",
 		SysName:        "Gaming",
 		loopPrevention: true,
+		snmp:           true,
+		led:            false,
+		mgmtVLAN:       1,
+		igmpSnooping:   true,
+		ingressUnits:   []int{0, 0, 0, 0, 0},
+		egressUnits:    []int{0, 0, 0, 0, 0},
 		portEnabled:    []bool{true, true, true, true, true},
 		portSpeed:      []int{0, 0, 0, 0, 0},
 		portFlow:       []bool{false, false, false, false, false},
@@ -179,6 +197,7 @@ func (s *Switch) Handler() http.Handler {
 	mux.HandleFunc("/zsystem_name_set.cgi", s.nameSet)
 	mux.HandleFunc("/portStatus.xml", s.portStatus)
 	mux.HandleFunc("/zloop_prevention_set.cgi", s.protectionSet)
+	s.registerManagement(mux)
 	return s.record(mux)
 }
 

@@ -90,11 +90,13 @@ type Client struct {
 	loggedIn bool
 
 	// cache holds the last authenticated reads. See ReadConfig for why.
-	cacheMu     sync.Mutex
-	cached      *Config
-	cachedAt    time.Time
-	cachedSet   *SwitchSettings
-	cachedSetAt time.Time
+	cacheMu      sync.Mutex
+	cached       *Config
+	cachedAt     time.Time
+	cachedSet    *SwitchSettings
+	cachedSetAt  time.Time
+	cachedMgmt   *Management
+	cachedMgmtAt time.Time
 }
 
 // configTTL bounds how long a cached authenticated read stays usable. Writes
@@ -131,12 +133,28 @@ func (c *Client) cacheSettings(settings SwitchSettings) {
 	c.cachedSet, c.cachedSetAt = &settings, time.Now()
 }
 
+func (c *Client) cachedManagement() (Management, bool) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.cachedMgmt == nil || time.Since(c.cachedMgmtAt) > configTTL {
+		return Management{}, false
+	}
+	return *c.cachedMgmt, true
+}
+
+func (c *Client) cacheManagement(management Management) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	c.cachedMgmt, c.cachedMgmtAt = &management, time.Now()
+}
+
 // forget drops every cached read, so the next one goes back to the device.
 func (c *Client) forget() {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
 	c.cached = nil
 	c.cachedSet = nil
+	c.cachedMgmt = nil
 }
 
 // NewClient builds a client. It opens no connection.
