@@ -45,6 +45,11 @@ archives:
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 
 checksum:
+  # The registries expect the manifest to be covered by the checksum file, not
+  # merely present beside it — so it is added here as well as to the release.
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
   algorithm: sha256
 
@@ -60,6 +65,12 @@ signs:
       - "${artifact}"
 
 release:
+  # terraform-registry-manifest.json has to reach the release under the name
+  # the registries look for: <project>_<version>_manifest.json. Without it the
+  # provider is rejected, and the message does not say which asset is missing.
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
   # The registries read the release assets, not the release notes, but a
   # changelog is what a human opens first.
   draft: false
