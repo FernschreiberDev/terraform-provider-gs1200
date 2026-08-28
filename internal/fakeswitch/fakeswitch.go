@@ -48,6 +48,17 @@ type Switch struct {
 	vlans []VLAN
 	pvid  map[int]int
 
+	// Per-port electrical settings, the other half of what the device holds.
+	SysName string
+	// Protections à l'échelle de l'appareil, que le firmware sert sur la même
+	// page que les ports.
+	loopPrevention bool
+	stormControl   bool
+	stormRatePPS   int
+	portEnabled    []bool
+	portSpeed      []int
+	portFlow       []bool
+
 	// token is the single session. Empty means nobody holds it, which is what
 	// makes a missed logout visible instead of merely slow.
 	token string
@@ -92,6 +103,11 @@ func New(password string) *Switch {
 		VLANEnabled:    true,
 		Model:          "GS1200-5v3",
 		Firmware:       "V1.00(ACPS.2)C0",
+		SysName:        "Gaming",
+		loopPrevention: true,
+		portEnabled:    []bool{true, true, true, true, true},
+		portSpeed:      []int{0, 0, 0, 0, 0},
+		portFlow:       []bool{false, false, false, false, false},
 		vlans: []VLAN{
 			{Index: 1, VID: 1, Name: "1", Untagged: []int{1, 2}},
 			{Index: 2, VID: 8, Name: "8", Tagged: []int{1}, Untagged: []int{5}},
@@ -158,6 +174,11 @@ func (s *Switch) Handler() http.Handler {
 	mux.HandleFunc("/zlogout.cgi", s.logout)
 	mux.HandleFunc("/zqvlanSet.cgi", s.vlanSet)
 	mux.HandleFunc("/zqvlanPvidSet.cgi", s.pvidSet)
+	mux.HandleFunc("/zPort.html", s.portPage)
+	mux.HandleFunc("/zport_setting.cgi", s.portSet)
+	mux.HandleFunc("/zsystem_name_set.cgi", s.nameSet)
+	mux.HandleFunc("/portStatus.xml", s.portStatus)
+	mux.HandleFunc("/zloop_prevention_set.cgi", s.protectionSet)
 	return s.record(mux)
 }
 
@@ -216,12 +237,143 @@ func (s *Switch) loginPage(w http.ResponseWriter, _ *http.Request) {
 	if s.token != "" {
 		errType = "2"
 	}
-	model, firmware := s.Model, s.Firmware
+	model, firmware, name := s.Model, s.Firmware, s.SysName
 	s.mu.Unlock()
+	// The real page volunteers all of this without a session.
 	fmt.Fprintf(w, `<script>
 var errType = "%s";
 var sysObj = { modelStr : [ "%s" ], firmwareStr : [ "%s" ] };
-</script>`, errType, model, firmware)
+var data_info = {sysnameStr:["%s"],modelStr:["%s"], macStr:["c4:9a:31:46:eb:23"],
+ipStr:["192.168.2.6"],netmaskStr:["255.255.255.0"],gatewayStr:["192.168.2.1"],
+dnsStr:["----"],firmwareStr:["%s"], system_uptime:["652992"], hardwareStr:["AN8858"]};
+</script>`, errType, model, firmware, name, model, firmware)
+}
+
+// portPage imitates zPort.html: the whole per-port configuration in one
+// JavaScript object, which is how the firmware serves it.
+func (s *Switch) portPage(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.token == "" {
+		http.Redirect(w, &http.Request{}, "/zlogin.html", http.StatusFound)
+		return
+	}
+
+	join := func(values []string) string { return strings.Join(values, ",") }
+	state, speed, flow := []string{}, []string{}, []string{}
+	for i := range s.portEnabled {
+		state = append(state, boolDigit(s.portEnabled[i]))
+		speed = append(speed, strconv.Itoa(s.portSpeed[i]))
+		flow = append(flow, boolDigit(s.portFlow[i]))
+	}
+	fmt.Fprintf(w, `<script>
+var max_port_num=%d;
+var lpEn = [%s];
+var sc_en = %s;
+var pps = %d;
+all_info = {
+state:[%s,],
+spd_cfg:[%s,],
+mode_cfg:[0,0,0,0,0,],
+fc_cfg:[%s,],
+ability:[31,31,31,31,31,],
+trunk_info:[0,0,0,0,0,],
+}
+</script>`, s.PortCount, boolDigit(s.loopPrevention), boolDigit(s.stormControl),
+		s.stormRatePPS, join(state), join(speed), join(flow))
+}
+
+// protectionSet imitates zloop_prevention_set.cgi, which carries loop
+// prevention and storm control on one form.
+func (s *Switch) protectionSet(w http.ResponseWriter, r *http.Request) {
+	defer w.WriteHeader(http.StatusOK)
+	_ = r.ParseForm()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.token == "" {
+		return
+	}
+	if v := r.PostForm.Get("lpEn"); v != "" {
+		s.loopPrevention = v != "0"
+	}
+	if v := r.PostForm.Get("storm_ctrl_en"); v != "" {
+		s.stormControl = v != "0"
+	}
+	if v := r.PostForm.Get("storm_ctrl_pps"); v != "" {
+		s.stormRatePPS = atoi(v)
+	}
+}
+
+// portSet imitates zport_setting.cgi. It honours g_port_map: only the ports
+// named there change, which is what lets one port be written without
+// disturbing the others.
+func (s *Switch) portSet(w http.ResponseWriter, r *http.Request) {
+	defer w.WriteHeader(http.StatusOK)
+	_ = r.ParseForm()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.token == "" {
+		return
+	}
+
+	changed := atoi(r.PostForm.Get("g_port_map"))
+	state := atoi(r.PostForm.Get("g_port_state"))
+	flow := atoi(r.PostForm.Get("g_port_flwcl"))
+	for i := range s.portEnabled {
+		if changed&(1<<uint(i)) == 0 {
+			continue
+		}
+		s.portEnabled[i] = state&(1<<uint(i)) != 0
+		s.portFlow[i] = flow&(1<<uint(i)) != 0
+		if raw := r.PostForm.Get(fmt.Sprintf("g_port_speed%d", i)); raw != "" && raw != "-1" {
+			s.portSpeed[i] = atoi(raw)
+		}
+	}
+}
+
+func (s *Switch) nameSet(w http.ResponseWriter, r *http.Request) {
+	defer w.WriteHeader(http.StatusOK)
+	_ = r.ParseForm()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.token == "" {
+		return
+	}
+	if name := r.PostForm.Get("sysName"); name != "" {
+		s.SysName = name
+	}
+}
+
+// portStatus imitates portStatus.xml: four groups of per-port values, of which
+// the first two are link state and negotiated rate.
+func (s *Switch) portStatus(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var up, rate, third, fourth []string
+	for i := range s.portEnabled {
+		// A port is "linked" here when it is administratively up; the
+		// emulator has no cables to model.
+		up = append(up, boolDigit(s.portEnabled[i]))
+		if s.portEnabled[i] {
+			rate = append(rate, "3")
+		} else {
+			rate = append(rate, "1")
+		}
+		third = append(third, "1")
+		fourth = append(fourth, "0")
+	}
+	fmt.Fprintf(w, `<script> var portStatus = "%s,&%s,&%s,&%s,&";</script>`,
+		strings.Join(up, ","), strings.Join(rate, ","),
+		strings.Join(third, ","), strings.Join(fourth, ","))
+}
+
+func boolDigit(on bool) string {
+	if on {
+		return "1"
+	}
+	return "0"
 }
 
 func (s *Switch) logon(w http.ResponseWriter, r *http.Request) {

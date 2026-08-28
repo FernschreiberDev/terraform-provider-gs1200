@@ -12,7 +12,12 @@ circuits sont réellement basculés, par opposition au schéma qui les décrit.
 | | Lecture | Écriture |
 |---|---|---|
 | Existence des VLANs 802.1Q | oui | oui |
-| Configuration par port : PVID, membres tagués et non tagués | oui | oui |
+| Par port : PVID, membres tagués et non tagués | oui | oui |
+| Par port : activation, vitesse/duplex, contrôle de flux | oui | oui |
+| Nom de l'appareil | oui | oui |
+| Prévention de boucle, storm control | oui | oui |
+| Identité : modèle, révision, firmware, MAC, passerelle, uptime | oui | — |
+| État réel des liens : présence et débit négocié | oui | — |
 | Modèle, firmware, VLAN de management | oui | — |
 
 Rien d'autre. Pas de trunking, pas de QoS, pas de mise à jour de firmware :
@@ -238,12 +243,53 @@ donc en parallèle, tandis que les ressources d'un même switch s'attendent
 proprement. `-parallelism=1` n'est pas nécessaire — il suffit que la valeur
 couvre le nombre de switchs.
 
+### `schaltwerk_zyxel_system`
+
+Le switch lui-même : `name`, `loop_prevention`, `storm_control`,
+`storm_control_pps`, `force`. Calculés : `model`, `hardware`, `firmware`,
+`mac`. Il n'y en a qu'un par switch, donc la ressource ne prend pas
+d'identifiant.
+
+Un attribut laissé de côté garde ce que le switch a déjà : cette ressource
+refuse de réinitialiser ce qu'on ne lui a pas demandé.
+
+Le nom obéit à la règle du firmware, copiée depuis sa propre page plutôt
+qu'inventée : 1 à 14 caractères, lettres, chiffres, tiret ou souligné.
+
+Couper `loop_prevention` est refusé sans `force`. Une boucle inonde le
+segment — et c'est cette inondation qui vous empêcherait d'atteindre le switch
+pour revenir en arrière.
+
 ### `data "schaltwerk_zyxel_switch"`
 
 Tout ce que le switch accepte de dire : `model`, `firmware`, `port_count`,
 `vlan_enabled`, `management_vlan`, `vlans`, `pvids`, et `partial` (vrai quand
 aucun mot de passe n'est configuré, auquel cas seule la table non
 authentifiée a pu être lue).
+
+S'y ajoutent, sans session : `name`, `hardware`, `mac`, `gateway`, `netmask`,
+`uptime_seconds`, et `links` — l'état réel de chaque port, présence du lien et
+débit négocié.
+
+## Ce que le firmware expose et que ce provider ne pilote pas
+
+Le firmware V1.00(ACPS.2)C0 contient une soixantaine d'endpoints. Trois
+familles sont volontairement absentes :
+
+- **Redémarrage, remise à zéro d'usine, mise à jour, sauvegarde et
+  restauration de configuration.** Ce sont des actes, pas des états. Une
+  ressource « redémarrer » n'a pas de sens déclaratif, et une remise à zéro
+  d'usine déclenchée par un plan mal lu ne se rattrape pas.
+- **L'adressage IP du switch.** Le changer coupe la connexion du provider au
+  milieu de sa propre écriture ; il est lisible dans le data source, et le
+  modifier reste une affaire d'interface web.
+- **Le mot de passe.** Une ressource qui fait tourner l'identifiant dont le
+  provider se sert pour se connecter est un piège à soi-même.
+
+Le reste — QoS 802.1p et par port, agrégation de liens, mirroring, IGMP
+snooping, jumbo frames, EEE, LED, délai HTTP, MAC statiques, diagnostic de
+câble — est atteignable : chaque page a été relevée, il ne manque que le même
+travail de protocole que pour les VLANs.
 
 ## Développement
 

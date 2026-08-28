@@ -32,6 +32,14 @@ type switchModel struct {
 	Partial        types.Bool   `tfsdk:"partial"`
 	VLANs          types.List   `tfsdk:"vlans"`
 	PVIDs          types.Map    `tfsdk:"pvids"`
+
+	Name     types.String `tfsdk:"name"`
+	Hardware types.String `tfsdk:"hardware"`
+	MAC      types.String `tfsdk:"mac"`
+	Gateway  types.String `tfsdk:"gateway"`
+	Netmask  types.String `tfsdk:"netmask"`
+	UptimeS  types.Int64  `tfsdk:"uptime_seconds"`
+	Links    types.List   `tfsdk:"links"`
 }
 
 func (d *switchDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -45,6 +53,28 @@ func (d *switchDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 			"for asserting invariants with `check` blocks.",
 		Attributes: map[string]schema.Attribute{
 			"host":     schema.StringAttribute{Computed: true, MarkdownDescription: "Address this data was read from."},
+			"name":     schema.StringAttribute{Computed: true, MarkdownDescription: "Device name."},
+			"hardware": schema.StringAttribute{Computed: true, MarkdownDescription: "Hardware revision."},
+			"mac":      schema.StringAttribute{Computed: true, MarkdownDescription: "Base MAC address."},
+			"gateway":  schema.StringAttribute{Computed: true, MarkdownDescription: "Default gateway the switch uses."},
+			"netmask":  schema.StringAttribute{Computed: true, MarkdownDescription: "Netmask of the switch's own address."},
+			"uptime_seconds": schema.Int64Attribute{
+				Computed:            true,
+				MarkdownDescription: "Seconds since the switch last booted.",
+			},
+			"links": schema.ListNestedAttribute{
+				Computed: true,
+				MarkdownDescription: "Live electrical state per port: whether something is " +
+					"plugged in and at what rate. Read without a session, so refreshing it " +
+					"never locks the switch's web interface.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"port":     schema.Int64Attribute{Computed: true},
+						"up":       schema.BoolAttribute{Computed: true},
+						"speed_mb": schema.Int64Attribute{Computed: true, MarkdownDescription: "Negotiated rate; zero when the link is down."},
+					},
+				},
+			},
 			"model":    schema.StringAttribute{Computed: true, MarkdownDescription: "Model string, from the login page."},
 			"firmware": schema.StringAttribute{Computed: true, MarkdownDescription: "Firmware version, from the login page."},
 			"port_count": schema.Int64Attribute{
@@ -94,6 +124,12 @@ func (d *switchDataSource) Configure(_ context.Context, req datasource.Configure
 
 // vlanObjectType mirrors the nested schema above; the framework needs it
 // spelled out to build the list value.
+var linkObjectType = types.ObjectType{AttrTypes: map[string]attrType{
+	"port":     types.Int64Type,
+	"up":       types.BoolType,
+	"speed_mb": types.Int64Type,
+}}
+
 var vlanObjectType = types.ObjectType{AttrTypes: map[string]attrType{
 	"vid":      types.Int64Type,
 	"name":     types.StringType,
@@ -152,8 +188,43 @@ func (d *switchDataSource) Read(ctx context.Context, _ datasource.ReadRequest, r
 		return
 	}
 
+	info, err := d.client.ReadDeviceInfo(ctx)
+	if err != nil {
+		resp.Diagnostics.AddWarning("Cannot read the switch's identity", err.Error())
+	}
+
+	links := []attrValue{}
+	status, err := d.client.ReadLinkStatus(ctx)
+	if err != nil {
+		resp.Diagnostics.AddWarning("Cannot read the ports' live link state", err.Error())
+	}
+	for _, link := range status {
+		object, diags := types.ObjectValue(linkObjectType.AttrTypes, map[string]attrValue{
+			"port":     types.Int64Value(int64(link.Port)),
+			"up":       types.BoolValue(link.Up),
+			"speed_mb": types.Int64Value(int64(link.SpeedMB)),
+		})
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		links = append(links, object)
+	}
+	linkList, diags := types.ListValue(linkObjectType, links)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &switchModel{
 		Host:           types.StringValue(d.client.Host),
+		Name:           types.StringValue(info.Name),
+		Hardware:       types.StringValue(info.Hardware),
+		MAC:            types.StringValue(info.MAC),
+		Gateway:        types.StringValue(info.Gateway),
+		Netmask:        types.StringValue(info.Netmask),
+		UptimeS:        types.Int64Value(int64(info.UptimeS)),
+		Links:          linkList,
 		Model:          types.StringValue(model),
 		Firmware:       types.StringValue(firmware),
 		PortCount:      types.Int64Value(int64(config.PortCount)),

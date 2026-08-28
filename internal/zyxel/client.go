@@ -89,10 +89,12 @@ type Client struct {
 	http     *http.Client
 	loggedIn bool
 
-	// cache holds the last authenticated read. See ReadConfig for why.
-	cacheMu  sync.Mutex
-	cached   *Config
-	cachedAt time.Time
+	// cache holds the last authenticated reads. See ReadConfig for why.
+	cacheMu     sync.Mutex
+	cached      *Config
+	cachedAt    time.Time
+	cachedSet   *SwitchSettings
+	cachedSetAt time.Time
 }
 
 // configTTL bounds how long a cached authenticated read stays usable. Writes
@@ -114,11 +116,27 @@ func (c *Client) cacheConfig(config Config) {
 	c.cached, c.cachedAt = &config, time.Now()
 }
 
-// forget drops the cache, so the next read goes back to the device.
+func (c *Client) cachedSettings() (SwitchSettings, bool) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.cachedSet == nil || time.Since(c.cachedSetAt) > configTTL {
+		return SwitchSettings{}, false
+	}
+	return *c.cachedSet, true
+}
+
+func (c *Client) cacheSettings(settings SwitchSettings) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	c.cachedSet, c.cachedSetAt = &settings, time.Now()
+}
+
+// forget drops every cached read, so the next one goes back to the device.
 func (c *Client) forget() {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
 	c.cached = nil
+	c.cachedSet = nil
 }
 
 // NewClient builds a client. It opens no connection.

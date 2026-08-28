@@ -146,6 +146,7 @@ func (p *schaltwerkProvider) Resources(context.Context) []func() resource.Resour
 	return []func() resource.Resource{
 		NewVLANResource,
 		NewPortResource,
+		NewSystemResource,
 	}
 }
 

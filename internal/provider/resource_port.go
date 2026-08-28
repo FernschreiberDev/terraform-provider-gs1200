@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -36,6 +37,13 @@ type portModel struct {
 	Tagged   types.Set   `tfsdk:"tagged"`
 	Untagged types.Set   `tfsdk:"untagged"`
 	Force    types.Bool  `tfsdk:"force"`
+
+	// Electrical settings, as opposed to 802.1Q membership. Optional and
+	// computed: leaving one out means "whatever the switch already has",
+	// not "reset it".
+	Enabled     types.Bool   `tfsdk:"enabled"`
+	Speed       types.String `tfsdk:"speed"`
+	FlowControl types.Bool   `tfsdk:"flow_control"`
 }
 
 func (r *portResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -90,11 +98,34 @@ func (r *portResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"force": schema.BoolAttribute{
 				MarkdownDescription: "Bypass the safety checks: removing this port from the " +
-					"switch's management VLAN, and a `pvid` the port does not carry untagged. " +
-					"Recovering from the first needs physical access to the switch.",
+					"switch's management VLAN, switching off a port that carries it, and a " +
+					"`pvid` the port does not carry untagged. Recovering from the first two " +
+					"needs physical access to the switch.",
 				Optional: true,
 				Computed: true,
 				Default:  booldefault.StaticBool(false),
+			},
+			"enabled": schema.BoolAttribute{
+				MarkdownDescription: "Whether the port is switched on at all.\n\n" +
+					"Switching off a port that carries the management VLAN takes the switch " +
+					"off the network; the provider refuses that unless `force` is set. Leave " +
+					"this out to keep whatever the switch already has.",
+				Optional: true,
+				Computed: true,
+			},
+			"speed": schema.StringAttribute{
+				MarkdownDescription: "Link speed and duplex: `auto` (the default on this " +
+					"hardware), `1000-full`, `100-auto`, `100-full`, `10-auto` or `10-full`. " +
+					"Forcing a rate the other end does not agree to leaves the link down.",
+				Optional:   true,
+				Computed:   true,
+				Validators: []validator.String{stringvalidator.OneOf(zyxel.Speeds()...)},
+			},
+			"flow_control": schema.BoolAttribute{
+				MarkdownDescription: "802.3x pause frames. Off throughout on this hardware, " +
+					"and rarely worth turning on outside storage networks.",
+				Optional: true,
+				Computed: true,
 			},
 		},
 	}
@@ -145,6 +176,15 @@ func (r *portResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	resp.Diagnostics.Append(applyPort(ctx, &state, config.ReadPort(port))...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	settings, err := r.client.ReadSettings(ctx)
+	if err != nil {
+		addDriverError(&resp.Diagnostics, "Cannot read the switch's port settings", err)
+		return
+	}
+	if electrical, ok := settings.Port(port); ok {
+		applySettings(&state, electrical)
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -213,7 +253,58 @@ func (r *portResource) write(ctx context.Context, plan portModel, diags *diagLis
 	if diags.HasError() {
 		return
 	}
+
+	// The electrical settings live on a different page and go out in a second
+	// write. Both are serialised by the device lock, so the switch still only
+	// ever handles one at a time.
+	settings, err := r.client.ReadSettings(ctx)
+	if err != nil {
+		addDriverError(diags, "Cannot read the switch's port settings", err)
+		return
+	}
+	current, ok := settings.Port(port)
+	if !ok {
+		diags.AddError(
+			fmt.Sprintf("Port %d has no settings on this switch", port),
+			"The 802.1Q side applied, but the port page does not list this port.")
+		return
+	}
+
+	// An attribute left out of the configuration keeps whatever the switch
+	// has: this resource declines to reset what it was not asked about.
+	wanted := current
+	if !plan.Enabled.IsNull() && !plan.Enabled.IsUnknown() {
+		wanted.Enabled = plan.Enabled.ValueBool()
+	}
+	if !plan.Speed.IsNull() && !plan.Speed.IsUnknown() {
+		wanted.Speed = plan.Speed.ValueString()
+	}
+	if !plan.FlowControl.IsNull() && !plan.FlowControl.IsUnknown() {
+		wanted.FlowControl = plan.FlowControl.ValueBool()
+	}
+
+	if wanted != current {
+		after, err := r.client.WritePortSettings(ctx, wanted, plan.Force.ValueBool())
+		if err != nil {
+			addDriverError(diags, fmt.Sprintf("Cannot configure port %d", port), err)
+			return
+		}
+		if applied, ok := after.Port(port); ok {
+			wanted = applied
+		}
+	}
+	applySettings(&plan, wanted)
+
 	diags.Append(state.Set(ctx, &plan)...)
+}
+
+// applySettings copies the switch's own view of a port's electrical settings
+// into the model. They are Computed, so an attribute the configuration left
+// out still gets a value — the device's.
+func applySettings(model *portModel, settings zyxel.PortSettings) {
+	model.Enabled = types.BoolValue(settings.Enabled)
+	model.Speed = types.StringValue(settings.Speed)
+	model.FlowControl = types.BoolValue(settings.FlowControl)
 }
 
 // applyPort copies the switch's own view into the model. An omitted list stays
