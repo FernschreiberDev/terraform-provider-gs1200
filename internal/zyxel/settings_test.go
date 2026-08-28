@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// realPortPage is the shape zPort.html served on 192.168.2.6 running
+// realPortPage is the shape zPort.html served on 192.0.2.10 running
 // V1.00(ACPS.2)C0, trimmed to the parts this driver reads.
 const realPortPage = `<script>
 var max_port_num=5;
@@ -27,9 +27,9 @@ trunk_info:[0,0,0,0,0,],
 // realLoginPage is the data_info block the login page volunteers to anyone,
 // with no session at all.
 const realLoginPage = `<script>var allow = 1;</script>
-<script>var data_info = {sysnameStr:["Gaming"],modelStr:["GS1200-5v3"],
-macStr:["c4:9a:31:46:eb:23"],ipStr:["192.168.2.6"],netmaskStr:["255.255.255.0"],
-gatewayStr:["192.168.2.1"],dnsStr:["----"],firmwareStr:["V1.00(ACPS.2)C0 "],
+<script>var data_info = {sysnameStr:["switch-a"],modelStr:["GS1200-5v3"],
+macStr:["00:00:5e:00:53:01"],ipStr:["192.0.2.10"],netmaskStr:["255.255.255.0"],
+gatewayStr:["192.0.2.1"],dnsStr:["----"],firmwareStr:["V1.00(ACPS.2)C0 "],
 system_uptime:["652992"], hardwareStr:["AN8858"]};
 </script>`
 
@@ -78,10 +78,10 @@ func TestParsesTheRealLoginPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDeviceInfo: %v", err)
 	}
-	if info.Model != "GS1200-5v3" || info.Name != "Gaming" {
+	if info.Model != "GS1200-5v3" || info.Name != "switch-a" {
 		t.Errorf("got name=%q model=%q", info.Name, info.Model)
 	}
-	if info.MAC != "c4:9a:31:46:eb:23" || info.Gateway != "192.168.2.1" {
+	if info.MAC != "00:00:5e:00:53:01" || info.Gateway != "192.0.2.1" {
 		t.Errorf("got mac=%q gateway=%q", info.MAC, info.Gateway)
 	}
 	if info.UptimeS != 652992 {
@@ -90,7 +90,7 @@ func TestParsesTheRealLoginPage(t *testing.T) {
 }
 
 // TestLinkStatusMatchesTheFleet decodes the two groups that were checked
-// against SNMP on all ten ports of the rack. The third and fourth groups stay
+// against SNMP on all ten ports of the two units. The third and fourth groups stay
 // undecoded on purpose — a guess in a data source becomes a fact people rely
 // on.
 func TestLinkStatusMatchesTheFleet(t *testing.T) {
@@ -110,7 +110,7 @@ func TestLinkStatusMatchesTheFleet(t *testing.T) {
 			name:    "living",
 			payload: `<script> var portStatus = "1,0,1,1,1,&3,1,3,3,2,&1,0,1,1,1,&0,0,0,0,0,&";</script>`,
 			want: []LinkStatus{
-				// Le port 5 négocie à 100 Mb, ce que le SNMP confirme.
+				// Port 5 negotiates 100 Mb, which the SNMP reading confirms.
 				{1, true, 1000}, {2, false, 0}, {3, true, 1000}, {4, true, 1000}, {5, true, 100},
 			},
 		},
@@ -167,7 +167,7 @@ func TestWritePortSettingsLeavesOtherPortsAlone(t *testing.T) {
 
 // TestRefusesToShutThePortCarryingManagement is the guard that matters most
 // here. Switching off the uplink takes the switch off the network, and getting
-// it back means walking to the rack.
+// it back means walking to the two units.
 func TestRefusesToShutThePortCarryingManagement(t *testing.T) {
 	device := newSeededFake(t)
 	client := clientForFake(t, device, "s3cret")
@@ -211,7 +211,7 @@ func TestDeviceNameFollowsTheFirmwareRule(t *testing.T) {
 	ctx := context.Background()
 
 	// The firmware's own page refuses anything but 1-14 word characters.
-	for _, bad := range []string{"", "un nom avec espaces", "beaucoup-trop-long-pour-lui", "accentué"} {
+	for _, bad := range []string{"", "a name with spaces", "far-too-long-for-this-firmware", "accentué"} {
 		if err := client.WriteDeviceName(ctx, bad); err == nil {
 			t.Errorf("the name %q should have been refused", bad)
 		}

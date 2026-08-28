@@ -373,7 +373,7 @@ type LinkStatus struct {
 //
 // The endpoint serves four groups of per-port values separated by "&". The
 // first is link state and the second the negotiated rate; both were checked
-// against SNMP readings on all ten ports of the fleet. The remaining two are
+// against SNMP readings on all ten ports of the two units. The remaining two are
 // not decoded, because guessing at them would put invented facts in a data
 // source people would then trust.
 func (c *Client) ReadLinkStatus(ctx context.Context) ([]LinkStatus, error) {

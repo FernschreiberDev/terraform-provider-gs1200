@@ -23,7 +23,7 @@ import (
 const realVLANXML = "1,1,1,0,0,6;2,8,8,0,2,32;3,1003,1003,0,6,24;"
 
 // Captured from the same switch's zVLAN_1Q_List.html.
-var realPVIDs = []int{1, 1, 1003, 1003, 8}
+var capturedPVIDs = []int{1, 1, 1003, 1003, 8}
 
 const realListPage = `<script>
 var portMaxNum = 5;
@@ -110,7 +110,7 @@ func TestAgreesWithTheSwitchOwnPVIDs(t *testing.T) {
 			untaggedVLAN[port] = entry.VID
 		}
 	}
-	for index, want := range realPVIDs {
+	for index, want := range capturedPVIDs {
 		if got := untaggedVLAN[index+1]; got != want {
 			t.Errorf("port %d is untagged in VLAN %d but its PVID is %d",
 				index+1, got, want)
@@ -148,7 +148,7 @@ func TestParsesTheListPage(t *testing.T) {
 	if management != 1 {
 		t.Errorf("management VLAN = %d, want 1", management)
 	}
-	for index, want := range realPVIDs {
+	for index, want := range capturedPVIDs {
 		if got := pvid[index+1]; got != want {
 			t.Errorf("PVID of port %d = %d, want %d", index+1, got, want)
 		}

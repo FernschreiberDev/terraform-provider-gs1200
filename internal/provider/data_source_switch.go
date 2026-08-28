@@ -7,7 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/zyxel"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/zyxel"
 )
 
 var (
@@ -43,7 +43,7 @@ type switchModel struct {
 }
 
 func (d *switchDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_zyxel_switch"
+	resp.TypeName = req.ProviderTypeName + "_switch"
 }
 
 func (d *switchDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {

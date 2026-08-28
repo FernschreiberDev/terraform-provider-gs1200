@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-// Fixtures trimmed from the pages 192.168.2.6 served on V1.00(ACPS.2)C0.
+// Fixtures trimmed from the pages 192.0.2.10 served on V1.00(ACPS.2)C0.
 const (
 	realManagementPage = `<script>
 var eeeinfo_ds = { portNum:5, enable_bit:0x0,};
 var led_eco = 0;
-ip_ds={state:0,vlan:1,maxVlan:4094,autodnsstate:0,ipStr:['192.168.2.6'],netmaskStr:['255.255.255.0'],gatewayStr:['192.168.2.1'],dnsStr:[''],mgmt_vlan:['1'],}
+ip_ds={state:0,vlan:1,maxVlan:4094,autodnsstate:0,ipStr:['192.0.2.10'],netmaskStr:['255.255.255.0'],gatewayStr:['192.0.2.1'],dnsStr:[''],mgmt_vlan:['1'],}
 snmp_info={snmpv1:1,snmpv2:1,trapv1:0,trapv2:0,readCm:["public"],writeCm:["private"],}
 </script>`
 
@@ -41,7 +41,7 @@ func TestParsesTheRealManagementPages(t *testing.T) {
 		t.Errorf("management VLAN = %d, want 1", management.ManagementVLAN)
 	}
 	if !management.SNMPEnabled {
-		t.Error("SNMP reads as off; snmpv2 is 1 — and Switchboard polls these switches")
+		t.Error("SNMP reads as off; snmpv2 is 1 — and an SNMP poller polls these switches")
 	}
 
 	if err := parseIGMPPage(realIGMPPage, &management); err != nil {
@@ -105,7 +105,7 @@ func TestManagementRoundTrip(t *testing.T) {
 		t.Fatalf("WriteManagement: %v", err)
 	}
 	if !after.EEE || !after.LED || !after.IGMPUnknownDrop {
-		t.Errorf("réglages non appliqués : %+v", after)
+		t.Errorf("settings not applied: %+v", after)
 	}
 	if after.IGMPStaticRouterPort != 3 {
 		t.Errorf("static router port = %d, want 3", after.IGMPStaticRouterPort)
@@ -113,16 +113,16 @@ func TestManagementRoundTrip(t *testing.T) {
 	if after.PortIsolationUplink != 1 {
 		t.Errorf("port isolation = %d, want 1", after.PortIsolationUplink)
 	}
-	// Ce qu'on n'a pas demandé ne doit pas avoir bougé.
+	// What was not asked about must not have moved.
 	if !after.SNMPEnabled || !after.IGMPSnooping {
-		t.Errorf("un réglage non demandé a changé : %+v", after)
+		t.Errorf("a setting nobody asked about changed: %+v", after)
 	}
 }
 
-// TestRefusesToBlindSwitchboard guards a switch whose port counters something
+// TestRefusesToBlindTheMonitoring guards a switch whose port counters something
 // else depends on: turning SNMP off is silent, and the thing that stops
 // working is a dashboard nobody is looking at when the apply runs.
-func TestRefusesToBlindSwitchboard(t *testing.T) {
+func TestRefusesToBlindTheMonitoring(t *testing.T) {
 	device := newSeededFake(t)
 	client := clientForFake(t, device, "s3cret")
 	ctx := context.Background()
@@ -156,7 +156,7 @@ func TestPortRatesLeaveOtherPortsAlone(t *testing.T) {
 	}
 	for i, rate := range after.IngressKbps {
 		if i != 2 && rate != 0 {
-			t.Errorf("le port %d a été plafonné sans qu'on le demande : %d", i+1, rate)
+			t.Errorf("port %d was capped without being asked: %d", i+1, rate)
 		}
 	}
 }
@@ -171,10 +171,10 @@ func TestRatesOutsideTheFirmwareGridAreRefused(t *testing.T) {
 
 	for _, rate := range []int{16, 100, 2_000_000} {
 		if _, err := client.WritePortRates(ctx, 2, rate, 0); err == nil {
-			t.Errorf("le débit %d aurait dû être refusé", rate)
+			t.Errorf("the rate %d should have been refused", rate)
 		}
 	}
 	if _, err := client.WritePortRates(ctx, 2, 0, 0); err != nil {
-		t.Errorf("zéro doit lever le plafond, obtenu %v", err)
+		t.Errorf("zero must lift the cap, got %v", err)
 	}
 }

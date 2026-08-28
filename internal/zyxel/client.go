@@ -166,7 +166,7 @@ func NewClient(host, password, scheme string, verifyTLS bool, timeout time.Durat
 		// A request costs about 1.9 s on idle hardware, almost all of it the
 		// TLS handshake. Twenty seconds is not for our own traffic — the
 		// device lock serialises that — but for everything else talking to
-		// the same switch, Switchboard's own polling first among them. No
+		// the same switch, another monitoring system's polling first among them. No
 		// lock here can arbitrate another program.
 		timeout = 20 * time.Second
 	}
@@ -251,7 +251,7 @@ func (c *Client) fetch(ctx context.Context, method, path, body, contentType stri
 		if err != nil {
 			return "", fmt.Errorf("cannot build a request for %s: %w", path, err)
 		}
-		req.Header.Set("User-Agent", "terraform-provider-schaltwerk")
+		req.Header.Set("User-Agent", "terraform-provider-gs1200")
 		if method == http.MethodPost {
 			req.Header.Set("Content-Type", contentType)
 		}

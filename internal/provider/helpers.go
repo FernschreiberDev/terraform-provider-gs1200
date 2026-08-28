@@ -9,7 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/zyxel"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/zyxel"
 )
 
 // diagList is the framework's diagnostics collection under a shorter name;

@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/zyxel"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/zyxel"
 )
 
 var (
@@ -49,7 +49,7 @@ type systemModel struct {
 }
 
 func (r *systemResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_zyxel_system"
+	resp.TypeName = req.ProviderTypeName + "_system"
 }
 
 func (r *systemResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
@@ -119,7 +119,7 @@ func (r *systemResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"led": schema.BoolAttribute{
 				MarkdownDescription: "The firmware's own Disable/Enable control for the panel " +
-					"lights. Both switches in this fleet report it off.",
+					"lights. Both switches in both units tested report it off.",
 				Optional: true,
 				Computed: true,
 			},

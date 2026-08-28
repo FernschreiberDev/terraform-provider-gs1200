@@ -217,7 +217,7 @@ func (c *Client) WriteManagement(ctx context.Context, want Management, force boo
 
 		if want.SNMPEnabled != current.SNMPEnabled && !want.SNMPEnabled && !force {
 			return fmt.Errorf("%w: switching SNMP off blinds anything polling this "+
-				"switch — Switchboard reads its port counters that way", ErrUnsafe)
+				"switch — a monitoring system may be reading its port counters that way", ErrUnsafe)
 		}
 
 		// EEE. The firmware applies it to every port at once and takes about

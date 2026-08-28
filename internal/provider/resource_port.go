@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/zyxel"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/zyxel"
 )
 
 var (
@@ -49,7 +49,7 @@ type portModel struct {
 }
 
 func (r *portResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_zyxel_port"
+	resp.TypeName = req.ProviderTypeName + "_port"
 }
 
 func (r *portResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
@@ -60,7 +60,7 @@ func (r *portResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"writes back. A write only ever moves **this port's** bit in each VLAN row, which " +
 			"is what lets every port be its own resource without two of them undoing each " +
 			"other.\n\n" +
-			"Every VLAN named here must already exist as a `schaltwerk_zyxel_vlan`.\n\n" +
+			"Every VLAN named here must already exist as a `gs1200_vlan`.\n\n" +
 			"**Destroying this resource does not change the switch.** A port always has some " +
 			"configuration; there is no \"unconfigured\" state to return it to, and picking one " +
 			"during a destroy would move traffic nobody asked to move. Terraform simply stops " +
@@ -244,7 +244,7 @@ func (r *portResource) ImportState(ctx context.Context, req resource.ImportState
 		resp.Diagnostics.AddError(
 			"Invalid import id",
 			fmt.Sprintf("A port is imported by its number, for example `tofu import "+
-				"schaltwerk_zyxel_port.uplink 1`. Got %q.", req.ID),
+				"gs1200_port.uplink 1`. Got %q.", req.ID),
 		)
 		return
 	}

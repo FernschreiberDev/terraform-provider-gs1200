@@ -1,14 +1,18 @@
-# Build and install terraform-provider-schaltwerk into a filesystem mirror.
+# Build and install terraform-provider-gs1200 into a filesystem mirror.
 #
 # There is no registry involved: OpenTofu resolves the provider from a
 # directory laid out the way a registry mirror would be, which is what
 # `filesystem_mirror` in a .tofurc points at.
 
-VERSION ?= 0.4.0
-BINARY  := terraform-provider-schaltwerk
-# The address in required_providers. Nothing is fetched from it; it is the key
-# the binary is filed under.
-ADDRESS := registry.opentofu.org/fernschreiberdev/schaltwerk
+VERSION ?= 0.1.0
+BINARY  := terraform-provider-gs1200
+# Where the provider is filed in a mirror. Terraform resolves a short source
+# to registry.terraform.io, OpenTofu to registry.opentofu.org — the same
+# provider, two addresses — so `install` files it under both and either tool
+# finds it.
+NAMESPACE := fernschreiberdev/gs1200
+REGISTRIES := registry.terraform.io registry.opentofu.org
+ADDRESS := registry.terraform.io/$(NAMESPACE)
 
 # Where a developer's own OpenTofu looks. Override for the CI runner.
 MIRROR ?= $(HOME)/.local/share/tofu-plugins
@@ -57,11 +61,13 @@ install: dist
 	@set -e; \
 	os=$$(go env GOOS); arch=$$(go env GOARCH); \
 	src="dist/$(ADDRESS)/$(VERSION)/$${os}_$${arch}/$(BINARY)_v$(VERSION)"; \
-	dir="$(MIRROR)/$(ADDRESS)/$(VERSION)/$${os}_$${arch}"; \
-	test -f "$$src" || { echo "dist ne contient pas $${os}_$${arch}"; exit 1; }; \
-	mkdir -p "$$dir"; \
-	cp "$$src" "$$dir/"; \
-	echo "installed $(VERSION) for $${os}_$${arch} in $$dir"
+	test -f "$$src" || { echo "dist has no $${os}_$${arch}"; exit 1; }; \
+	for registry in $(REGISTRIES); do \
+	  dir="$(MIRROR)/$$registry/$(NAMESPACE)/$(VERSION)/$${os}_$${arch}"; \
+	  mkdir -p "$$dir"; \
+	  cp "$$src" "$$dir/"; \
+	  echo "installed $(VERSION) for $${os}_$${arch} in $$dir"; \
+	done
 
 # dist builds every platform into ./dist, laid out as a filesystem mirror so
 # the whole tree can be copied to the runner as-is.

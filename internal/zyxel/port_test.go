@@ -8,7 +8,7 @@ import (
 )
 
 // TestReadPortMatchesTheFleet turns the two switches' real VLAN tables inside
-// out and checks the port-centric view against what a person reading the rack
+// out and checks the port-centric view against what a person reading the two units
 // would say. The tagged/untagged sets come from the VLAN rows, the PVIDs from
 // a different page entirely, so agreement across the two is meaningful.
 func TestReadPortMatchesTheFleet(t *testing.T) {
@@ -38,7 +38,7 @@ func TestReadPortMatchesTheFleet(t *testing.T) {
 			want: map[int]PortConfig{
 				1: {Port: 1, PVID: 1, Untagged: []int{1}, Tagged: []int{1003}},
 				2: {Port: 2, PVID: 1, Untagged: []int{1}, Tagged: []int{1003}},
-				// Hybride : IoT en natif, plus le VLAN de test en tagué.
+				// Hybrid: one VLAN native, another riding tagged.
 				3: {Port: 3, PVID: 1003, Untagged: []int{1003}, Tagged: []int{1010}},
 				4: {Port: 4, PVID: 1003, Untagged: []int{1003}, Tagged: []int{}},
 				5: {Port: 5, PVID: 1003, Untagged: []int{1003}, Tagged: []int{}},
@@ -67,8 +67,8 @@ func TestWritePortMovesAPortBetweenVLANs(t *testing.T) {
 	device := newSeededFake(t)
 	client := clientForFake(t, device, "s3cret")
 
-	// Port 5 quitte le VLAN 8 pour l'IoT : le cas courant, un appareil qu'on
-	// déplace de réseau.
+	// Port 5 leaves VLAN 8 for VLAN 1003: the everyday case, a device moved
+	// from one network to another.
 	if _, err := client.WritePort(context.Background(), PortConfig{
 		Port: 5, PVID: 1003, Untagged: []int{1003},
 	}, false); err != nil {
@@ -84,7 +84,7 @@ func TestWritePortMovesAPortBetweenVLANs(t *testing.T) {
 		t.Errorf("port 5 = pvid %d tagged %v untagged %v", got.PVID, got.Tagged, got.Untagged)
 	}
 	if vlan, _ := after.VLAN(8); len(vlan.Untagged) != 0 {
-		t.Errorf("le VLAN 8 garde le port 5 : untagged %v", vlan.Untagged)
+		t.Errorf("VLAN 8 still holds port 5: untagged %v", vlan.Untagged)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestWritePortLeavesOtherPortsAlone(t *testing.T) {
 		if got.PVID != want.PVID ||
 			!equalPorts(got.Tagged, want.Tagged) ||
 			!equalPorts(got.Untagged, want.Untagged) {
-			t.Errorf("le port %d a bougé : avant pvid=%d tagged=%v untagged=%v, après pvid=%d tagged=%v untagged=%v",
+			t.Errorf("port %d moved: before pvid=%d tagged=%v untagged=%v, after pvid=%d tagged=%v untagged=%v",
 				port, want.PVID, want.Tagged, want.Untagged,
 				got.PVID, got.Tagged, got.Untagged)
 		}
@@ -131,19 +131,19 @@ func TestWritePortRefusesAPVIDItCannotCarryBack(t *testing.T) {
 	device := newSeededFake(t)
 	client := clientForFake(t, device, "s3cret")
 
-	// PVID 1003 alors que le port ne porte 1003 que tagué : les trames
-	// entrent dans un VLAN qui ne peut pas les ressortir.
+	// PVID 1003 while the port carries 1003 tagged only: frames arrive in a
+	// VLAN that cannot carry them back out.
 	_, err := client.WritePort(context.Background(), PortConfig{
 		Port: 5, PVID: 1003, Tagged: []int{1003},
 	}, false)
 	if !errors.Is(err, ErrUnsafe) {
-		t.Fatalf("attendu ErrUnsafe, obtenu %v", err)
+		t.Fatalf("want ErrUnsafe, got %v", err)
 	}
 
 	if _, err := client.WritePort(context.Background(), PortConfig{
 		Port: 5, PVID: 1003, Tagged: []int{1003},
 	}, true); err != nil {
-		t.Fatalf("force doit lever le refus, obtenu %v", err)
+		t.Fatalf("force must lift the refusal, got %v", err)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestWritePortRefusesAnUnknownVLAN(t *testing.T) {
 		Port: 3, PVID: 1003, Untagged: []int{1003}, Tagged: []int{4000},
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "VLAN 4000 does not exist") {
-		t.Fatalf("une faute de frappe sur un VLAN doit échouer, pas provisionner ; obtenu %v", err)
+		t.Fatalf("a typo in a VLAN id must fail rather than provision one; got %v", err)
 	}
 }
 
@@ -164,22 +164,22 @@ func TestEnsureVLANIsIdempotent(t *testing.T) {
 	client := clientForFake(t, device, "s3cret")
 	ctx := context.Background()
 
-	// Un VLAN neuf naît sans membre : l'appartenance appartient aux ports.
+	// A fresh VLAN is born with no members: membership belongs to the ports.
 	config, err := client.EnsureVLAN(ctx, 20, false)
 	if err != nil {
 		t.Fatalf("EnsureVLAN: %v", err)
 	}
 	entry, exists := config.VLAN(20)
 	if !exists {
-		t.Fatal("le VLAN 20 n'a pas été créé")
+		t.Fatal("VLAN 20 was not created")
 	}
 	if len(entry.Tagged) != 0 || len(entry.Untagged) != 0 {
-		t.Errorf("un VLAN neuf doit être vide, obtenu tagged=%v untagged=%v",
+		t.Errorf("a fresh VLAN must be empty, got tagged=%v untagged=%v",
 			entry.Tagged, entry.Untagged)
 	}
 
-	// Deux ports rejoignant le même VLAN neuf ne doivent pas se disputer.
+	// Two ports joining the same new VLAN must not race each other.
 	if _, err := client.EnsureVLAN(ctx, 20, false); err != nil {
-		t.Fatalf("un second appel doit être sans effet, obtenu %v", err)
+		t.Fatalf("a second call must be a no-op, got %v", err)
 	}
 }

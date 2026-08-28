@@ -16,7 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/zyxel"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/zyxel"
 )
 
 var (
@@ -39,14 +39,14 @@ type vlanModel struct {
 }
 
 func (r *vlanResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_zyxel_vlan"
+	resp.TypeName = req.ProviderTypeName + "_vlan"
 }
 
 func (r *vlanResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "The existence of one 802.1Q VLAN on a Zyxel GS1200.\n\n" +
 			"This resource declares that the VLAN exists, and nothing else. Which ports " +
-			"carry it, tagged or untagged, belongs to `schaltwerk_zyxel_port` — the two " +
+			"carry it, tagged or untagged, belongs to `gs1200_port` — the two " +
 			"never write the same bytes, so they cannot fight over them. A VLAN created " +
 			"here starts with no members.",
 		Attributes: map[string]schema.Attribute{
@@ -101,7 +101,7 @@ func (r *vlanResource) Create(ctx context.Context, req resource.CreateRequest, r
 			resp.Diagnostics.AddError(
 				fmt.Sprintf("VLAN %d already exists on this switch", vid),
 				fmt.Sprintf("Import it instead of creating it:\n\n"+
-					"  tofu import schaltwerk_zyxel_vlan.<name> %d", vid),
+					"  tofu import gs1200_vlan.<name> %d", vid),
 			)
 			return
 		}
@@ -181,7 +181,7 @@ func (r *vlanResource) ImportState(ctx context.Context, req resource.ImportState
 		resp.Diagnostics.AddError(
 			"Invalid import id",
 			fmt.Sprintf("A VLAN is imported by its id, for example `tofu import "+
-				"schaltwerk_zyxel_vlan.iot 1003`. Got %q.", req.ID),
+				"gs1200_vlan.iot 1003`. Got %q.", req.ID),
 		)
 		return
 	}

@@ -85,7 +85,7 @@ func TestOneRequestAtATimePerSwitch(t *testing.T) {
 	wg.Wait()
 
 	if peak := watch.highest(); peak != 1 {
-		t.Errorf("%d requêtes simultanées sur un même switch, attendu 1", peak)
+		t.Errorf("%d concurrent requests against one switch, want 1", peak)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestTwoSwitchesRunInParallel(t *testing.T) {
 	wg.Wait()
 
 	if peak := shared.highest(); peak != 2 {
-		t.Errorf("pic de %d requêtes simultanées sur deux switchs, attendu 2 "+
-			"(le verrou doit être par appareil, pas global)", peak)
+		t.Errorf("peak of %d concurrent requests across two switches, want 2 "+
+			"(the lock has to be per device, not global)", peak)
 	}
 }

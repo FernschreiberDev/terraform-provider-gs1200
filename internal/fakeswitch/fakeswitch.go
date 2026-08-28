@@ -50,13 +50,12 @@ type Switch struct {
 
 	// Per-port electrical settings, the other half of what the device holds.
 	SysName string
-	// Protections à l'échelle de l'appareil, que le firmware sert sur la même
-	// page que les ports.
+	// Device-wide protections, which the firmware serves on the same page as
+	// the ports.
 	loopPrevention bool
 	stormControl   bool
 	stormRatePPS   int
-	// Réglages à l'échelle de l'appareil, éparpillés sur trois pages par le
-	// firmware.
+	// Device-wide settings, which the firmware scatters across three pages.
 	eee           bool
 	led           bool
 	snmp          bool
@@ -105,7 +104,7 @@ func (s *Switch) Seed(vlanXML string, pvid map[int]int) {
 }
 
 // New builds a switch seeded with the configuration captured from the real
-// gs1200 at 192.168.2.6.
+// gs1200 at 192.0.2.10.
 func New(password string) *Switch {
 	sum := sha256.Sum256([]byte(password))
 	return &Switch{
@@ -115,7 +114,7 @@ func New(password string) *Switch {
 		VLANEnabled:    true,
 		Model:          "GS1200-5v3",
 		Firmware:       "V1.00(ACPS.2)C0",
-		SysName:        "Gaming",
+		SysName:        "switch-a",
 		loopPrevention: true,
 		snmp:           true,
 		led:            false,
@@ -262,8 +261,8 @@ func (s *Switch) loginPage(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, `<script>
 var errType = "%s";
 var sysObj = { modelStr : [ "%s" ], firmwareStr : [ "%s" ] };
-var data_info = {sysnameStr:["%s"],modelStr:["%s"], macStr:["c4:9a:31:46:eb:23"],
-ipStr:["192.168.2.6"],netmaskStr:["255.255.255.0"],gatewayStr:["192.168.2.1"],
+var data_info = {sysnameStr:["%s"],modelStr:["%s"], macStr:["00:00:5e:00:53:01"],
+ipStr:["192.0.2.10"],netmaskStr:["255.255.255.0"],gatewayStr:["192.0.2.1"],
 dnsStr:["----"],firmwareStr:["%s"], system_uptime:["652992"], hardwareStr:["AN8858"]};
 </script>`, errType, model, firmware, name, model, firmware)
 }

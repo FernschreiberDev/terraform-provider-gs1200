@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/fakeswitch"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/fakeswitch"
 )
 
 func main() {

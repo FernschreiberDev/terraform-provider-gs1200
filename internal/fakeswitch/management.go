@@ -44,7 +44,7 @@ func (s *Switch) managementPage(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, `<script>
 var eeeinfo_ds = { portNum:%d, enable_bit:0x%x,};
 var led_eco = %s;
-ip_ds={state:0,vlan:1,maxVlan:4094,ipStr:['192.168.2.6'],mgmt_vlan:['%d'],}
+ip_ds={state:0,vlan:1,maxVlan:4094,ipStr:['192.0.2.10'],mgmt_vlan:['%d'],}
 snmp_info={snmpv1:%s,snmpv2:%s,readCm:["public"],}
 </script>`, s.PortCount, eeeBit, boolDigit(s.led), s.mgmtVLAN,
 		boolDigit(s.snmp), boolDigit(s.snmp))

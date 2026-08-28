@@ -1,4 +1,4 @@
-module github.com/FernschreiberDev/terraform-provider-schaltwerk
+module github.com/FernschreiberDev/terraform-provider-gs1200
 
 go 1.27.0
 

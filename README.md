@@ -1,196 +1,89 @@
-# terraform-provider-schaltwerk
+# terraform-provider-gs1200
 
-Provider OpenTofu pour les switchs **Zyxel GS1200 (v3)**, pilotés par leur
-interface web. Écrit pour être utilisé depuis [tf-opnsense](https://github.com/FernschreiberDev/tf-opnsense),
-là où le reste du réseau est déjà décrit en HCL.
+A Terraform / OpenTofu provider for the **Zyxel GS1200-5 v3** web-managed
+switch: VLANs, per-port 802.1Q membership and PVID, link settings, rate limits,
+and the switch-wide protections.
 
-Le nom est l'allemand pour *appareillage de commutation* : l'armoire où les
-circuits sont réellement basculés, par opposition au schéma qui les décrit.
+The GS1200 has no API. Everything here was derived by reading the firmware's
+own JavaScript on a unit running `V1.00(ACPS.2)C0`, then checked against the
+hardware — including, where possible, against independent SNMP readings.
 
-## Ce qu'il gère, et ce qu'il ne gère pas
+> **Scope.** This targets the GS1200-5 v3 specifically. Other GS1200 revisions
+> ship different firmware (v1 and v2 have no SNMP agent at all), and the larger
+> GS1900 and XGS families speak something else entirely. It may work on a
+> GS1200-8 v3, which uses the same pages, but that has not been tested.
 
-| | Lecture | Écriture |
+## What it manages
+
+| | Read | Write |
 |---|---|---|
-| Existence des VLANs 802.1Q | oui | oui |
-| Par port : PVID, membres tagués et non tagués | oui | oui |
-| Par port : activation, vitesse/duplex, contrôle de flux | oui | oui |
-| Nom de l'appareil | oui | oui |
-| Prévention de boucle, storm control | oui | oui |
-| Par port : débits entrant et sortant (kbps) | oui | oui |
-| IGMP snooping, drop du multicast inconnu, port routeur statique | oui | oui |
-| SNMP v1/v2c, LED, EEE (802.3az) | oui | oui |
-| Isolation de ports (uplink unique) | oui | oui |
-| VLAN de management | oui | — |
-| Identité : modèle, révision, firmware, MAC, passerelle, uptime | oui | — |
-| État réel des liens : présence et débit négocié | oui | — |
-| Modèle, firmware, VLAN de management | oui | — |
+| 802.1Q VLANs | yes | yes |
+| Per port: PVID, tagged and untagged membership | yes | yes |
+| Per port: admin state, speed/duplex, flow control | yes | yes |
+| Per port: ingress and egress rate caps | yes | yes |
+| Device name | yes | yes |
+| Loop prevention, storm control | yes | yes |
+| IGMP snooping, unknown-multicast drop, static router port | yes | yes |
+| SNMP v1/v2c, panel LEDs, EEE (802.3az) | yes | yes |
+| Port isolation | yes | yes |
+| Identity: model, hardware revision, firmware, MAC, gateway, uptime | yes | — |
+| Live link state: presence and negotiated rate | yes | — |
+| Management VLAN | yes | — (deliberately) |
 
-Rien d'autre. Pas de trunking, pas de QoS, pas de mise à jour de firmware :
-le protocole a été relevé sur le matériel, pas dans une documentation, et ce
-provider ne prétend faire que ce qui a été observé.
-
-**Les autres équipements ne sont pas gérés.** Le MikroTik CRS305 sous SwOS
-n'expose ses VLANs ni en SNMP ni par une API exploitable ; le Linksys LGS328C
-les expose en lecture SNMP mais pas en écriture. Les bornes WiFi (Apple
-AirPort, HUAWEI Mesh) sont pilotables — les pilotes existent en Python dans le
-projet switchboard — mais ne sont pas encore portées ici.
-
-## Le protocole, en bref
-
-Tout a été dérivé du JavaScript du firmware d'un GS1200-5 v3 en
-`V1.00(ACPS.2)C0`. Quatre points comptent :
-
-- **Une seule session web à la fois.** Tant qu'une session est ouverte,
-  personne d'autre n'atteint l'interface — y compris toi. Le provider n'en
-  ouvre une que pour écrire, ou pour lire les PVID, et la referme toujours,
-  même quand l'`apply` est interrompu. Les lectures authentifiées sont mises
-  en cache pour la durée d'une commande : un switch à cinq ports serait sinon
-  verrouillé cinq fois de suite par un seul `plan`.
-- **La lecture des VLANs ne demande pas de session.** `/vlanEntry.xml` répond
-  à qui le demande. C'est une faiblesse du firmware, mais elle a une
-  conséquence heureuse : rafraîchir une VLAN ne verrouille jamais ton switch.
-- **Les bitmaps de ports sont décalés de un.** Le port 1 est le bit 1, pas le
-  bit 0. Se tromper d'un cran déplace silencieusement chaque port d'une
-  position — sur une écriture, cela réaffecte du trafic réel à la mauvaise
-  prise. C'est la partie la plus testée du code.
-- **Les CGI répondent 200 quoi qu'il arrive.** La réponse ne prouve rien :
-  chaque écriture est relue et vérifiée contre ce qui était demandé.
-- **Il ne répond qu'à une requête à la fois.** Pas seulement une *session* à
-  la fois : une *requête*. Quatre rafraîchissements lancés ensemble ne
-  s'exécutent pas en parallèle, ils font la queue dans l'appareil — et le
-  chronomètre HTTP tourne pendant cette attente, si bien que le dernier
-  dépasse le délai. Le provider fait donc la queue de son côté, où attendre ne
-  coûte rien, avec un verrou **par appareil** : les switchs d'un parc avancent
-  de front, les requêtes d'un même switch se rangent.
-- **Il referme ses connexions sans prévenir.** Le GS1200 abandonne vite une
-  connexion laissée en réserve. Go réémet tout seul une requête idempotente
-  dans ce cas, mais jamais un POST — et le login en est un. Une lecture de VLAN
-  en GET laisse donc une connexion que le login suivant reprend, morte. Rare en
-  série, fréquent dès que deux switchs sont configurés de front. Le provider
-  réémet ces requêtes-là, et seulement elles : le transport ne signale cette
-  erreur qu'avant d'avoir écrit quoi que ce soit, donc rejouer ne peut pas
-  répéter un effet.
-- **Son TLS date.** Le GS1200 n'accepte qu'une seule suite : TLS 1.2 avec
-  `AES128-GCM-SHA256` sur un échange de clés RSA. Go 1.22 a retiré toutes les
-  suites à échange RSA de sa liste par défaut, faute de confidentialité
-  persistante — un client Go standard et ce switch n'ont donc plus rien en
-  commun, et la connexion meurt sur `tls: handshake failure` sans jamais
-  mentionner de chiffrement. `curl` les propose encore, d'où l'illusion que le
-  réseau va bien. Le provider nomme cette suite explicitement, en dernier
-  recours après les suites modernes.
-
-## Le garde-fou
-
-Une modification qui retirerait un port de la VLAN de management du switch est
-refusée :
-
-```
-Error: Cannot write VLAN 1
-
-unsafe change refused: this would remove port(s) [1] from the management
-VLAN 1; the switch could become unreachable
-
-Set `force = true` on this resource if you are certain, and have physical
-access to the switch should it become unreachable.
-```
-
-`force = true` lève le refus. Ne le mets que si tu peux atteindre le switch
-physiquement, parce que c'est ce que coûtera l'erreur.
-
-## Installation (mirror filesystem)
-
-Ce provider n'est pas publié sur un registry. OpenTofu le résout depuis un
-répertoire organisé comme le serait un mirror.
-
-```bash
-make install
-```
-
-Puis dans `~/.tofurc` :
+## Quick start
 
 ```hcl
-provider_installation {
-  filesystem_mirror {
-    path    = "/Users/<toi>/.local/share/tofu-plugins"
-    include = ["registry.opentofu.org/fernschreiberdev/*"]
-  }
-  direct {
-    exclude = ["registry.opentofu.org/fernschreiberdev/*"]
+terraform {
+  required_providers {
+    gs1200 = {
+      source  = "fernschreiberdev/gs1200"
+      version = "~> 0.1"
+    }
   }
 }
-```
 
-Le bloc `direct` est indispensable : sans lui, OpenTofu ira quand même
-interroger le registry public pour ce provider, et échouera.
-
-Pour le runner CI, `make dist` construit `darwin_arm64`, `linux_amd64` et
-`linux_arm64` dans `./dist`, déjà arborés comme un mirror — l'arbre se copie
-tel quel.
-
-## Utilisation
-
-Une instance de provider par switch, via un alias : le matériel est l'unité de
-contention, donc aussi l'unité de configuration.
-
-```hcl
-provider "schaltwerk" {
-  alias    = "gs1200"
-  host     = "192.168.2.6"
-  password = var.gs1200_password
+provider "gs1200" {
+  host     = "192.0.2.10"
+  password = var.switch_password
 }
 
-resource "schaltwerk_zyxel_vlan" "iot" {
-  provider = schaltwerk.gs1200
-
-  vid      = 1003
-  tagged   = [1, 2]
-  untagged = [3, 4]
+resource "gs1200_vlan" "iot" {
+  vid = 1003
 }
 
-resource "schaltwerk_zyxel_pvid" "port3" {
-  provider = schaltwerk.gs1200
-
-  port = 3
-  vid  = schaltwerk_zyxel_vlan.iot.vid
+resource "gs1200_port" "port3" {
+  port     = 3
+  pvid     = 1003
+  untagged = [1003]
 }
 ```
 
-Exemple complet dans [`examples/main.tf`](examples/main.tf).
+One provider instance addresses one switch. For several, use aliases — or a
+module per switch, which lets the resources inside drop the `provider`
+argument entirely. See [`examples/`](examples/).
 
-### `provider "schaltwerk"`
+## PVID and untagged: two directions of travel
 
-| Argument | Défaut | Rôle |
-|---|---|---|
-| `host` | `$SCHALTWERK_HOST` | Adresse de l'interface web, sans schéma. |
-| `password` | `$SCHALTWERK_PASSWORD` | Mot de passe web. Haché en SHA-256 avant envoi, comme le fait la page de login : le clair ne passe jamais sur le fil. |
-| `scheme` | `https` | `https` ou `http`. |
-| `verify_tls` | `false` | Ces switchs portent un certificat auto-signé non remplaçable. |
-| `timeout` | `10` | Secondes par requête. Le CPU du GS1200 est lent. |
+This is the distinction that governs the whole model, and it is easy to
+conflate.
 
-### PVID et untagged : deux sens de circulation
+**`untagged` / `tagged` — egress.** For a (port, VLAN) pair: when a frame of
+that VLAN *leaves* this port, does it keep its 802.1Q tag or lose it?
 
-C'est la distinction qui gouverne tout le modèle, et elle se confond
-facilement.
-
-**`untagged` / `tagged` — la SORTIE.** Pour un couple (port, VLAN) : quand une
-trame de ce VLAN *sort* par ce port, garde-t-elle son étiquette 802.1Q ou la
-perd-elle ? Membre untagged = elle sort nue. Membre tagged = elle sort
-étiquetée.
-
-**`pvid` — l'ENTRÉE.** Quand une trame *sans étiquette* arrive sur ce port, à
-quel VLAN l'affecte-t-on ? Une seule valeur par port, forcément : une trame
-nue ne porte rien qui permette de choisir.
+**`pvid` — ingress.** When a frame arrives on this port *without* a tag, which
+VLAN does it belong to? One value per port, necessarily: a bare frame carries
+nothing to choose from.
 
 ```hcl
-# Port d'accès : l'appareil branché ignore tout des VLANs.
-resource "schaltwerk_zyxel_port" "camera" {
+# Access port: the attached device knows nothing of VLANs.
+resource "gs1200_port" "camera" {
   port     = 5
-  pvid     = 1003   # ce qui entre nu devient de l'IoT
-  untagged = [1003] # ce qui sort de l'IoT ressort nu
+  pvid     = 1003   # what arrives untagged becomes VLAN 1003
+  untagged = [1003] # what leaves in VLAN 1003 leaves bare
 }
 
-# Port hybride : management en natif, le reste en tagué vers le cœur.
-resource "schaltwerk_zyxel_port" "uplink" {
+# Hybrid port: management native, the rest tagged towards the core.
+resource "gs1200_port" "uplink" {
   port     = 1
   pvid     = 1
   untagged = [1]
@@ -198,147 +91,130 @@ resource "schaltwerk_zyxel_port" "uplink" {
 }
 ```
 
-Les deux sont presque toujours cohérents, mais ils sont indépendants. Un
-`pvid` désignant un VLAN que le port ne porte pas untagged donne un
-comportement asymétrique : le trafic entre quelque part et les réponses
-ressortent ailleurs. Le matériel l'autorise et ne signale rien — le provider,
-lui, refuse, sauf `force`.
+They are nearly always consistent, but they are independent. A `pvid` naming a
+VLAN the port does not carry untagged gives asymmetric behaviour: traffic
+enters in one place and replies leave in another. The hardware allows it and
+reports nothing — this provider refuses it unless `force` is set.
 
-### `schaltwerk_zyxel_vlan`
+## What the hardware forces on the design
 
-`vid` (1-4094, remplace la ressource si modifié) et `force`. `index` est
-calculé : l'emplacement de la VLAN dans la table du constructeur, qui l'adresse
-par slot et non par identifiant.
+Four traits of this firmware shape everything below them.
 
-Cette ressource déclare **l'existence** d'un VLAN, rien d'autre. Quels ports le
-portent appartient à `schaltwerk_zyxel_port` : les deux n'écrivent jamais les
-mêmes octets, donc elles ne peuvent pas se les disputer. Un VLAN créé ici naît
-sans membre.
+**One request at a time.** Not one *session* — one *request*. Four refreshes
+sent together do not run in parallel; they queue inside the device, and the
+client's clock runs during that wait. So the queue lives on this side, where
+waiting is free, behind a lock keyed **by device**: several switches make
+progress at once while one switch's requests line up.
 
-Créer un VLAN qui existe déjà est refusé plutôt que silencieusement absorbé :
+**One web session at a time.** While a session is held, nobody else reaches the
+web interface — including you. The provider claims one only when it must, and
+always releases it, including when an apply is interrupted.
 
-```bash
-tofu import 'schaltwerk_zyxel_vlan.mgmt' 1
-```
+**Port bitmaps are offset by one.** Port 1 is bit 1, not bit 0. Being one out
+silently moves every port by one position — on a write, that reassigns live
+traffic to the wrong socket. It is the most heavily tested part of the code.
 
-### `schaltwerk_zyxel_port`
+**The CGI endpoints answer 200 whatever they did.** The reply proves nothing,
+so every write is read back and compared against what was asked.
 
-`port` (remplace la ressource si modifié), `pvid`, `untagged`, `tagged`,
-`force`. Import par numéro de port.
+Two more oddities have their own handling: the switch **drops idle connections
+without warning** (Go re-sends idempotent requests on its own but never a POST,
+and the login is a POST), and its **TLS is ancient** — one cipher suite,
+`AES128-GCM-SHA256` over an RSA key exchange, which Go 1.22 removed from its
+client defaults.
 
-Le switch range l'information dans l'autre sens — une table de VLANs, chacun
-portant un bitmap de ports membres — donc cette ressource est une vue que le
-provider assemble et réécrit. **Une écriture ne déplace jamais que le bit de
-son propre port** dans chaque ligne de VLAN. C'est cet invariant qui permet à
-chaque port d'être sa propre ressource sans que deux d'entre elles se défassent
-mutuellement, et qui rend un `apply` parallèle sûr.
+## Safety refusals
 
-Tout VLAN nommé ici doit déjà exister en tant que `schaltwerk_zyxel_vlan` :
-une faute de frappe sur un identifiant échoue au lieu de provisionner un VLAN.
+Four changes are refused because they are not recoverable remotely. `force =
+true` lifts each one.
 
-**Détruire cette ressource ne change rien sur le switch.** Un port a toujours
-une configuration ; il n'existe pas d'état « non configuré » où le remettre, et
-en choisir un pendant un destroy déplacerait du trafic que personne n'a demandé
-à déplacer. OpenTofu cesse simplement de le suivre.
+| Refusal | Why |
+|---|---|
+| Removing a port from the management VLAN | The switch drops off the network. |
+| Deleting the management VLAN | Same, permanently. |
+| Switching off a port carrying the management VLAN | Same. |
+| Turning loop prevention off | A loop floods the segment, and the flood is what would stop you reaching the switch to undo it. |
+| Turning SNMP off | Anything polling the switch goes blind, and a monitoring outage is silent by nature. |
 
-### Parallélisme
+The provider also refuses a `pvid` the port does not carry untagged, a rate the
+firmware cannot represent exactly, and creating a VLAN that already exists —
+that last one points you at `import` rather than silently adopting live
+configuration.
 
-Le verrou est **par appareil**, pas par client : deux switchs se configurent
-donc en parallèle, tandis que les ressources d'un même switch s'attendent
-proprement. `-parallelism=1` n'est pas nécessaire — il suffit que la valeur
-couvre le nombre de switchs.
+## Resources
 
-### `schaltwerk_zyxel_system`
+- **`gs1200_vlan`** — the existence of one VLAN. Which ports carry it belongs
+  to `gs1200_port`; the two never write the same bytes.
+- **`gs1200_port`** — one port's whole configuration: `pvid`, `untagged`,
+  `tagged`, plus the optional `enabled`, `speed`, `flow_control`,
+  `ingress_rate_kbps`, `egress_rate_kbps`.
+- **`gs1200_system`** — the switch itself: name, loop prevention, storm
+  control, IGMP snooping, SNMP, LEDs, EEE, port isolation.
+- **`gs1200_switch`** (data source) — everything the switch will report,
+  including live link state, read without claiming the web session.
 
-Le switch lui-même : `name`, `loop_prevention`, `storm_control`,
-`storm_control_pps`, `igmp_snooping`, `igmp_unknown_multicast_drop`,
-`igmp_static_router_port`, `led`, `energy_efficient_ethernet`, `snmp`,
-`port_isolation_uplink`, `force`. Calculés : `model`, `hardware`, `firmware`,
-`mac`, `management_vlan`. Il n'y en a qu'un par switch, donc la ressource ne prend pas
-d'identifiant.
+Full reference under [`docs/`](docs/).
 
-Un attribut laissé de côté garde ce que le switch a déjà : cette ressource
-refuse de réinitialiser ce qu'on ne lui a pas demandé.
+Optional attributes left out of a configuration keep whatever the switch
+already has. This provider declines to reset what it was not asked about.
 
-Le nom obéit à la règle du firmware, copiée depuis sa propre page plutôt
-qu'inventée : 1 à 14 caractères, lettres, chiffres, tiret ou souligné.
+## What it deliberately does not expose
 
-Couper `loop_prevention` est refusé sans `force`. Une boucle inonde le
-segment — et c'est cette inondation qui vous empêcherait d'atteindre le switch
-pour revenir en arrière.
+- **Reboot, factory reset, firmware upgrade, config backup/restore.** These are
+  acts, not states. A factory reset triggered by a misread plan is not
+  recoverable.
+- **The switch's IP address and management VLAN.** Changing either severs the
+  provider's own connection mid-write. Both are readable.
+- **The web password.** A resource that rotates the credential the provider
+  authenticates with is a trap for its own author.
 
-Couper `snmp` l'est aussi : tout ce qui interroge ce switch devient aveugle, et
-ce qui cesse de fonctionner est un tableau de bord que personne ne regarde au
-moment de l'apply.
+Reachable but not yet implemented, every page having been mapped: QoS (802.1p
+and port-based), link aggregation, port mirroring, jumbo frames, SNMP
+community strings, static MAC entries.
 
-`management_vlan` est en lecture seule à dessein. Le changer est la façon de
-perdre un switch, et le provider trancherait sa propre connexion au milieu de
-sa propre écriture.
+**Cable diagnostics** deserve their own note: it is an active test that briefly
+interrupts the link. As a data source, refreshed on every plan, it would cut
+the network on every plan.
 
-`energy_efficient_ethernet` s'applique à tous les ports d'un coup sur ce
-matériel, et le switch met une dizaine de secondes à se stabiliser.
-
-### `data "schaltwerk_zyxel_switch"`
-
-Tout ce que le switch accepte de dire : `model`, `firmware`, `port_count`,
-`vlan_enabled`, `management_vlan`, `vlans`, `pvids`, et `partial` (vrai quand
-aucun mot de passe n'est configuré, auquel cas seule la table non
-authentifiée a pu être lue).
-
-S'y ajoutent, sans session : `name`, `hardware`, `mac`, `gateway`, `netmask`,
-`uptime_seconds`, et `links` — l'état réel de chaque port, présence du lien et
-débit négocié.
-
-## Ce que le firmware expose et que ce provider ne pilote pas
-
-Le firmware V1.00(ACPS.2)C0 contient une soixantaine d'endpoints. Trois
-familles sont volontairement absentes :
-
-- **Redémarrage, remise à zéro d'usine, mise à jour, sauvegarde et
-  restauration de configuration.** Ce sont des actes, pas des états. Une
-  ressource « redémarrer » n'a pas de sens déclaratif, et une remise à zéro
-  d'usine déclenchée par un plan mal lu ne se rattrape pas.
-- **L'adressage IP du switch.** Le changer coupe la connexion du provider au
-  milieu de sa propre écriture ; il est lisible dans le data source, et le
-  modifier reste une affaire d'interface web.
-- **Le mot de passe.** Une ressource qui fait tourner l'identifiant dont le
-  provider se sert pour se connecter est un piège à soi-même.
-
-Ce qui reste hors du provider et qui pourrait y entrer — QoS 802.1p et par
-port, agrégation de liens, mirroring, jumbo frames, délai d'inactivité HTTP,
-communautés SNMP, MAC statiques, diagnostic de câble. Chaque page a été
-relevée ; il ne manque que le même travail de protocole que pour les VLANs.
-
-Le diagnostic de câble mérite une note : c'est un test actif qui interrompt
-brièvement le lien. En faire un data source, rafraîchi à chaque plan, couperait
-le réseau à chaque plan.
-
-## Développement
+## Development
 
 ```bash
 make          # fmt, vet, test, build
 ```
 
-Les tests ne touchent aucun matériel. Deux choses les rendent sérieux :
+No test touches hardware. Two things make them meaningful:
 
-- `internal/zyxel/live_fleet_test.go` compare le parseur Go au pilote Python
-  de switchboard **sur les octets réellement servis par les deux GS1200**, le
-  27 août 2026. Deux implémentations indépendantes d'un format non documenté
-  qui se vérifient l'une l'autre — un parseur seul ne peut que se prouver
-  cohérent avec lui-même.
-- `internal/fakeswitch` émule un GS1200-5 v3 avec état : session unique, CGI
-  qui répondent 200 sans rien appliquer, refus de supprimer une VLAN encore
-  utilisée comme PVID. De quoi faire tourner un vrai `tofu apply` :
+- **Captured fixtures.** `internal/zyxel/live_fleet_test.go` holds the exact
+  bytes two units served, paired with what an independent SNMP poll reported
+  for the same ports at the same moment. Two implementations of an
+  undocumented format checking each other; a parser alone can only prove itself
+  self-consistent.
+- **A stateful emulator.** `internal/fakeswitch` imitates the device closely
+  enough to run a real `plan` and `apply` against it: the single session, CGI
+  endpoints that answer 200 without applying anything, a refusal to delete a
+  VLAN still used as a PVID.
 
 ```bash
-go run ./cmd/fakeswitch -addr 127.0.0.1:8099 -password s3cret
+go run ./cmd/fakeswitch -addr 127.0.0.1:8099 -password secret
 ```
 
-La compilation est reproductible : à source égale, octets égaux. Il a fallu
-`-buildvcs=false` pour cela, Go estampillant par défaut le commit courant dans
-le binaire — le même code compilé avant et après un commit donnait des octets
-différents, et le lockfile généré depuis l'un rejetait l'autre en accusant la
-somme de contrôle sans jamais nommer git.
+Builds are reproducible: same source, same bytes. That needed
+`-buildvcs=false`, since Go otherwise stamps the current commit into the
+binary — the same code built either side of a commit produced different bytes,
+and a lock file generated from one rejected the other while blaming the
+checksum rather than git.
 
-`make install` copie depuis `dist` au lieu de recompiler, pour la même raison :
-un seul artefact, pas deux qu'on espère identiques.
+## Provenance
+
+The protocol was recovered by reading the pages the firmware serves and the
+JavaScript it ships to the browser, for the purpose of interoperating with
+hardware its owner already has. No firmware code or assets are redistributed
+here; the test fixtures hold only the small factual payloads needed to prove
+the parsing is right.
+
+Zyxel is a trademark of Zyxel Communications Corp. This project is not
+affiliated with, endorsed by, or supported by Zyxel.
+
+## License
+
+[MPL-2.0](LICENSE).

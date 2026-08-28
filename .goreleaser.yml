@@ -1,0 +1,68 @@
+# Release build for the Terraform and OpenTofu registries.
+#
+# Both expect the same shape: one zip per platform, a checksum file, and a
+# detached GPG signature over that checksum file. The binary inside each zip
+# has to be named terraform-provider-<name>_v<version>, which is what the
+# registries look for once they unpack it.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    # Reproducible: same source, same bytes. -buildvcs=false because Go
+    # otherwise stamps the current commit into the binary, so the same code
+    # built either side of a commit produces different artefacts.
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - '-s -w -X main.version={{.Version}}'
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+      - arm
+      - '386'
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: darwin
+        goarch: '386'
+      - goos: windows
+        goarch: arm
+    binary: '{{ .ProjectName }}_v{{ .Version }}'
+
+archives:
+  - formats: [zip]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
+release:
+  # The registries read the release assets, not the release notes, but a
+  # changelog is what a human opens first.
+  draft: false
+
+changelog:
+  use: github-native

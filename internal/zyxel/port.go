@@ -167,7 +167,7 @@ func (c *Client) WritePort(ctx context.Context, want PortConfig, force bool) (Co
 		for _, vid := range append(append([]int{}, wantTagged...), wantUntagged...) {
 			if _, exists := current.VLAN(vid); !exists {
 				return fmt.Errorf("VLAN %d does not exist on this switch; declare a "+
-					"schaltwerk_zyxel_vlan for it before a port refers to it", vid)
+					"gs1200_vlan for it before a port refers to it", vid)
 			}
 		}
 

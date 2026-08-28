@@ -69,18 +69,18 @@ func TestALoginSurvivesAStaleConnection(t *testing.T) {
 	}, 1, errors.New("http: "+staleConnMessage))
 
 	if err := client.Login(context.Background()); err != nil {
-		t.Fatalf("le login aurait dû survivre à une connexion périmée : %v", err)
+		t.Fatalf("the login should have survived a stale connection: %v", err)
 	}
 	if flaky.tries != 2 {
-		t.Errorf("%d tentatives, attendu 2 (un échec puis un succès)", flaky.tries)
+		t.Errorf("%d attempts, want 2 (one failure then a success)", flaky.tries)
 	}
 
-	// Le corps doit repartir intact : un reader déjà consommé enverrait un
-	// POST vide, et le switch répondrait « mot de passe refusé ».
+	// The body has to be re-sent intact: a spent reader would send an empty
+	// POST, which the switch reads as a wrong password.
 	sum := sha256.Sum256([]byte("hunter2hunter2"))
 	want := "password=" + hex.EncodeToString(sum[:])
 	if len(bodies) != 1 || bodies[0] != want {
-		t.Errorf("corps reçu %q, attendu %q", bodies, want)
+		t.Errorf("body received %q, want %q", bodies, want)
 	}
 }
 
@@ -94,13 +94,13 @@ func TestARealFailureIsNotRetried(t *testing.T) {
 
 	err := client.Login(context.Background())
 	if err == nil {
-		t.Fatal("une panne réelle doit remonter, pas être réessayée")
+		t.Fatal("a real failure must surface, not be retried")
 	}
 	if !strings.Contains(err.Error(), "connection refused") {
-		t.Errorf("erreur inattendue : %v", err)
+		t.Errorf("unexpected error: %v", err)
 	}
 	if flaky.tries != 1 {
-		t.Errorf("%d tentatives, attendu 1", flaky.tries)
+		t.Errorf("%d attempts, want 1", flaky.tries)
 	}
 }
 
@@ -112,9 +112,9 @@ func TestAPersistentlyDeadConnectionGivesUp(t *testing.T) {
 	}, 99, errors.New("http: "+staleConnMessage))
 
 	if err := client.Login(context.Background()); err == nil {
-		t.Fatal("attendu un échec après épuisement des tentatives")
+		t.Fatal("want a failure once the attempts are exhausted")
 	}
 	if flaky.tries != staleConnAttempts {
-		t.Errorf("%d tentatives, attendu %d", flaky.tries, staleConnAttempts)
+		t.Errorf("%d attempts, want %d", flaky.tries, staleConnAttempts)
 	}
 }

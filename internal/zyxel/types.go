@@ -3,7 +3,7 @@
 // The GS1200 exposes almost nothing over SNMP beyond MIB-II counters — no
 // Q-BRIDGE-MIB, so VLANs are invisible there. Everything in this package was
 // derived by reading the firmware's own JavaScript on a GS1200-5v3 running
-// V1.00(ACPS.2)C0, and is a port of the Python driver in the switchboard
+// V1.00(ACPS.2)C0, and is a port of the Python driver in the an SNMP poller
 // project, which was itself written against that hardware.
 //
 // Protocol, as observed:

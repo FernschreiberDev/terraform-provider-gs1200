@@ -1,7 +1,8 @@
-// terraform-provider-schaltwerk manages Zyxel GS1200 switches from OpenTofu.
+// terraform-provider-gs1200 manages Zyxel GS1200-5 v3 switches from Terraform
+// and OpenTofu.
 //
-// The name is the German for switchgear — the cabinet where circuits are
-// actually thrown, as opposed to the diagram of them.
+// The switch has no API. Everything this provider knows was derived from the
+// firmware's own JavaScript and checked against the hardware.
 package main
 
 import (
@@ -11,7 +12,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/provider"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/provider"
 )
 
 // version is stamped at build time: -ldflags "-X main.version=0.1.0".
@@ -27,7 +28,7 @@ func main() {
 		// The address OpenTofu resolves in required_providers. It is not a URL
 		// and nothing is fetched from it: with a filesystem mirror, this is
 		// simply the key under which the binary is filed.
-		Address: "registry.opentofu.org/fernschreiberdev/schaltwerk",
+		Address: "registry.terraform.io/fernschreiberdev/gs1200",
 		Debug:   debug,
 	})
 	if err != nil {

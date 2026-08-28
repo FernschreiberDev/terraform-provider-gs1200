@@ -1,78 +1,96 @@
-# A worked example against the two GS1200-5 v3 in the rack.
+# A worked example against two GS1200-5 v3 units.
 #
-# One aliased provider instance per switch: the device is the unit of
-# contention (it serves a single web session), so it is also the unit of
-# configuration.
+# One provider instance per switch: the device is the unit of contention (it
+# answers one request at a time and serves a single web session), so it is
+# also the unit of configuration.
 
 terraform {
   required_providers {
-    schaltwerk = {
-      source  = "fernschreiberdev/schaltwerk"
+    gs1200 = {
+      source  = "fernschreiberdev/gs1200"
       version = "~> 0.1"
     }
   }
 }
 
-variable "gs1200_password" {
-  description = "Mot de passe de l'interface web du GS1200 principal"
+variable "switch_password" {
+  description = "Web-interface password of the switch"
   type        = string
   sensitive   = true
 }
 
-provider "schaltwerk" {
-  alias    = "gs1200"
-  host     = "192.168.2.6"
-  password = var.gs1200_password
+provider "gs1200" {
+  alias    = "rack"
+  host     = "192.0.2.10"
+  password = var.switch_password
 }
 
-# Ce que le switch rapporte, sans rien y écrire. Utile pour découvrir une
-# configuration avant de la reprendre en main.
-data "schaltwerk_zyxel_switch" "gs1200" {
-  provider = schaltwerk.gs1200
+# What the switch reports, without writing anything. Useful for discovering a
+# configuration before taking it over.
+data "gs1200_switch" "rack" {
+  provider = gs1200.rack
 }
 
-output "gs1200_vlans" {
-  value = data.schaltwerk_zyxel_switch.gs1200.vlans
+output "rack_ports_down" {
+  value = [for l in data.gs1200_switch.rack.links : l.port if !l.up]
 }
 
-# --- VLAN IoT, taguée vers l'uplink, non taguée sur le port 5 --------------
-resource "schaltwerk_zyxel_vlan" "iot" {
-  provider = schaltwerk.gs1200
+# --- The switch itself -----------------------------------------------------
+resource "gs1200_system" "rack" {
+  provider = gs1200.rack
 
-  vid      = 1003
-  tagged   = [1, 2] # trunks vers le coeur de réseau
-  untagged = [3, 4] # ports d'accès
+  name            = "rack-a"
+  loop_prevention = true
+  snmp            = true
+  igmp_snooping   = true
 }
 
-# Le PVID d'un port est une ressource distincte : appartenir à une VLAN et
-# recevoir son trafic non tagué sont deux réglages différents sur ce matériel.
-resource "schaltwerk_zyxel_pvid" "port3" {
-  provider = schaltwerk.gs1200
+# --- VLANs -----------------------------------------------------------------
+# These declare existence only. Which ports carry them belongs to the port
+# resources, so the two never write the same bytes.
 
-  port = 3
-  # La référence ordonne les deux : la VLAN existe avant qu'un port la vise.
-  vid = schaltwerk_zyxel_vlan.iot.vid
-}
-
-resource "schaltwerk_zyxel_pvid" "port4" {
-  provider = schaltwerk.gs1200
-
-  port = 4
-  vid  = schaltwerk_zyxel_vlan.iot.vid
-}
-
-# --- La VLAN de management -------------------------------------------------
-# Elle existe déjà : on l'importe plutôt que de la créer, et on interdit sa
-# destruction. La supprimer rendrait le switch injoignable.
+# The management VLAN already exists; import it rather than create it, and
+# refuse to destroy it — losing it means walking to the switch.
 #
-#   tofu import 'schaltwerk_zyxel_vlan.mgmt' 1
-resource "schaltwerk_zyxel_vlan" "mgmt" {
-  provider = schaltwerk.gs1200
-
+#   terraform import 'gs1200_vlan.mgmt' 1
+resource "gs1200_vlan" "mgmt" {
+  provider = gs1200.rack
   vid      = 1
-  untagged = [1, 2]
 
   lifecycle {
     prevent_destroy = true
   }
+}
+
+resource "gs1200_vlan" "iot" {
+  provider = gs1200.rack
+  vid      = 1003
+}
+
+# --- Ports -----------------------------------------------------------------
+
+# Uplink to the core: management native, IoT riding tagged.
+resource "gs1200_port" "port1" {
+  provider = gs1200.rack
+
+  port     = 1
+  pvid     = 1
+  untagged = [1]
+  tagged   = [1003]
+
+  depends_on = [gs1200_vlan.mgmt, gs1200_vlan.iot]
+}
+
+# Access port, capped at 10 Mbit in and 2 Mbit out.
+resource "gs1200_port" "port3" {
+  provider = gs1200.rack
+
+  port     = 3
+  pvid     = 1003
+  untagged = [1003]
+
+  ingress_rate_kbps = 10240
+  egress_rate_kbps  = 2048
+
+  depends_on = [gs1200_vlan.iot]
 }

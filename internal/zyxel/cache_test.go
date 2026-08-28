@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/fakeswitch"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/fakeswitch"
 )
 
 // newSeededFake is an emulated GS1200 carrying the configuration captured
-// from the real 192.168.2.6.
+// from the real 192.0.2.10.
 func newSeededFake(t *testing.T) *fakeswitch.Switch {
 	t.Helper()
 	return fakeswitch.New("s3cret")

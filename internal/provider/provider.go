@@ -1,12 +1,12 @@
-// Package provider exposes the Zyxel GS1200 web driver as an OpenTofu
-// provider.
+// Package provider exposes the Zyxel GS1200-5 v3 web driver as a Terraform
+// and OpenTofu provider.
 //
 // One provider instance addresses one switch, so a fleet is declared with
 // aliases:
 //
-//	provider "schaltwerk" {
+//	provider "gs1200" {
 //	  alias    = "gs1200"
-//	  host     = "192.168.2.6"
+//	  host     = "192.0.2.10"
 //	  password = var.gs1200_password
 //	}
 //
@@ -26,25 +26,25 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/FernschreiberDev/terraform-provider-schaltwerk/internal/zyxel"
+	"github.com/FernschreiberDev/terraform-provider-gs1200/internal/zyxel"
 )
 
 // Ensure the implementation satisfies the framework's interface.
-var _ provider.Provider = (*schaltwerkProvider)(nil)
+var _ provider.Provider = (*gs1200Provider)(nil)
 
-type schaltwerkProvider struct {
+type gs1200Provider struct {
 	version string
 }
 
 // New returns the provider factory the plugin server needs.
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &schaltwerkProvider{version: version}
+		return &gs1200Provider{version: version}
 	}
 }
 
-func (p *schaltwerkProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "schaltwerk"
+func (p *gs1200Provider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "gs1200"
 	resp.Version = p.version
 }
 
@@ -56,14 +56,14 @@ type providerModel struct {
 	Timeout   types.Int64  `tfsdk:"timeout"`
 }
 
-func (p *schaltwerkProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
+func (p *gs1200Provider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages Zyxel GS1200 (v3) switches over their web interface. " +
 			"Declare one aliased provider instance per switch.",
 		Attributes: map[string]schema.Attribute{
 			"host": schema.StringAttribute{
 				MarkdownDescription: "Address of the switch's web interface, without a scheme " +
-					"(for example `192.168.2.6`). Falls back to `SCHALTWERK_HOST`.",
+					"(for example `192.0.2.10`). Falls back to `SCHALTWERK_HOST`.",
 				Optional: true,
 			},
 			"password": schema.StringAttribute{
@@ -92,7 +92,7 @@ func (p *schaltwerkProvider) Schema(_ context.Context, _ provider.SchemaRequest,
 	}
 }
 
-func (p *schaltwerkProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+func (p *gs1200Provider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
 	var config providerModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
@@ -142,7 +142,7 @@ func (p *schaltwerkProvider) Configure(ctx context.Context, req provider.Configu
 	resp.ResourceData = client
 }
 
-func (p *schaltwerkProvider) Resources(context.Context) []func() resource.Resource {
+func (p *gs1200Provider) Resources(context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewVLANResource,
 		NewPortResource,
@@ -150,7 +150,7 @@ func (p *schaltwerkProvider) Resources(context.Context) []func() resource.Resour
 	}
 }
 
-func (p *schaltwerkProvider) DataSources(context.Context) []func() datasource.DataSource {
+func (p *gs1200Provider) DataSources(context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewSwitchDataSource,
 	}

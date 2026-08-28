@@ -34,8 +34,3 @@ jobs:
 
       - name: Cross-compile every shipped platform
         run: make dist
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: schaltwerk-mirror
-          path: dist/
